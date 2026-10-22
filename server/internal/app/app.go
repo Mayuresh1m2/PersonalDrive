@@ -30,6 +30,7 @@ import (
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/storage"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/tlsutil"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/volume"
+	"github.com/Mayuresh1m2/PersonalDrive/server/internal/webui"
 )
 
 // Version is set at build time with -ldflags "-X .../app.Version=...".
@@ -323,7 +324,7 @@ func (a *App) APIServer(tlsMgr *tlsutil.Manager, extra func(*http.ServeMux, *api
 	return api.New(api.Deps{
 		Cfg: a.Cfg, DB: a.DB, Lib: a.Lib, Auth: a.Auth, Notifier: a.Notifier, Jobs: a.Jobs, Thumbs: a.Thumbs,
 		TLS: tlsMgr, Health: a.HealthReport, Log: a.Log, Version: Version, SetupCode: a.SetupCode,
-		Extra: extra,
+		Extra: extra, WebUI: webui.Handler(),
 	})
 }
 

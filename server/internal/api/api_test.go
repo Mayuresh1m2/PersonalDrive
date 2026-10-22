@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -450,5 +451,47 @@ func TestThumbnailGenerated(t *testing.T) {
 			t.Fatal("media info never extracted")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestWebUIAndMediaTokens(t *testing.T) {
+	e := newEnv(t)
+	alice := e.admin()
+	for _, p := range []string{"/", "/space/3", "/admin/people"} {
+		resp, err := http.Get(e.srv.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || !bytes.Contains(body, []byte("PersonalDrive")) {
+			t.Fatalf("GET %s: %d", p, resp.StatusCode)
+		}
+		if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+			t.Fatalf("missing CSP on %s: %q", p, csp)
+		}
+	}
+	if resp, _ := http.Get(e.srv.URL + "/assets/missing.js"); resp.StatusCode != 404 {
+		t.Fatalf("missing asset should 404, got %d", resp.StatusCode)
+	}
+
+	res, _ := alice.upload(0, "page.html", []byte("<script>alert(1)</script>"), nil)
+	var tok tokens
+	(&client{e: e}).do("POST", "/api/v1/auth/login", map[string]any{"username": "alice", "password": "alice's long password"}, &tok)
+	content := fmt.Sprintf("%s/api/v1/files/%d/content?access_token=%s", e.srv.URL, res.File.ID, tok.AccessToken)
+	resp, err := http.Get(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("query token on content: %d", resp.StatusCode)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.HasPrefix(csp, "sandbox") {
+		t.Fatalf("user HTML must be sandboxed, CSP = %q", csp)
+	}
+	// Query tokens are not accepted on other endpoints.
+	if resp, _ := http.Get(fmt.Sprintf("%s/api/v1/me?access_token=%s", e.srv.URL, tok.AccessToken)); resp.StatusCode != 401 {
+		t.Fatalf("query token accepted on /me: %d", resp.StatusCode)
 	}
 }

@@ -124,6 +124,13 @@ func (s *Server) fileContent(w http.ResponseWriter, r *http.Request) {
 	defer fh.Close()
 	w.Header().Set("ETag", `"`+f.SHA256+`"`)
 	w.Header().Set("Content-Type", f.Mime)
+	// User content is served from the app's origin: sandbox it so an uploaded
+	// HTML/SVG file can't run scripts with the viewer's session. (Browsers
+	// refuse to render PDFs in a sandbox, and PDFs can't reach the page.)
+	if f.Mime != "application/pdf" {
+		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
+	}
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
 	disp := "inline"
 	if r.URL.Query().Get("download") == "1" {

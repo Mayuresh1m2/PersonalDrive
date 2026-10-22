@@ -1,1 +1,3 @@
 bin/
+internal/webui/dist/*
+!internal/webui/dist/.keep

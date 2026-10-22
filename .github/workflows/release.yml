@@ -16,9 +16,15 @@ jobs:
         with:
           go-version-file: server/go.mod
           cache-dependency-path: server/go.sum
-      - name: Build
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Build (with the web app embedded)
         working-directory: server
         run: |
+          make web
           make build-all VERSION=${GITHUB_REF_NAME}
           cd bin && for f in pdrive-linux-*; do sha256sum "$f" > "$f.sha256"; done
       - name: Publish
