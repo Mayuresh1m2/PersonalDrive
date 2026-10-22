@@ -1,0 +1,812 @@
+openapi: 3.1.0
+info:
+  title: PersonalDrive API
+  version: 1.0.0
+  description: |
+    API of the PersonalDrive home server. All client apps (mobile, web, desktop)
+    are generated from / written against this file.
+
+    **Transport.** HTTPS on the LAN with a private CA. Clients learn the CA's
+    SHA-256 fingerprint from the pairing QR code (`ca_sha256`) or mDNS TXT
+    record (`_pdrive._tcp`, `ca=`) and pin it.
+
+    **Auth.** `Authorization: Bearer <access_token>`. Access tokens live ~15
+    minutes; refresh with the device's refresh token (rotated on every use —
+    always store the newest one).
+
+    **Errors.** Non-2xx responses carry `{"error": {"code", "message"}}`.
+    Notable codes: `library_unavailable` (503, disk A unplugged — server is
+    read-only), `quota_exceeded` (507), `hash_mismatch` (422), `conflict` (409),
+    `rate_limited` (429).
+
+    **Sync model.** The server is the source of truth. Every change gets a
+    monotonically increasing `seq`. Clients list once, remember
+    `GET /sync/cursor`, then follow `GET /sync/changes`. A `move` or `trash` of
+    a directory applies to everything under `old_path`/`path`. Uploads carry
+    the `base_version` the client last saw; a mismatch never overwrites — the
+    server stores a "(conflict from <device> <date>)" copy instead.
+servers:
+  - url: https://{host}:8443
+    variables:
+      host:
+        default: pdrive.local
+security:
+  - bearer: []
+
+paths:
+  /healthz:
+    get:
+      summary: Liveness and read-only status
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  read_only: { type: boolean }
+
+  /api/v1/server:
+    get:
+      summary: Server identity (unauthenticated)
+      security: []
+      responses:
+        "200":
+          description: Server info
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ServerInfo" }
+
+  /api/v1/ca.pem:
+    get:
+      summary: Download the server's CA certificate
+      security: []
+      responses:
+        "200":
+          description: PEM certificate
+          content:
+            application/x-pem-file: {}
+
+  /api/v1/setup:
+    post:
+      summary: Create the first admin (requires the setup code from the server log)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [setup_code, username, password]
+              properties:
+                setup_code: { type: string }
+                username: { type: string }
+                display_name: { type: string }
+                password: { type: string, minLength: 10 }
+                device_name: { type: string }
+                platform: { type: string }
+      responses:
+        "201": { $ref: "#/components/responses/Tokens" }
+        "403": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /api/v1/auth/login:
+    post:
+      summary: Log in and register this device
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                device_name: { type: string }
+                platform: { type: string, examples: [ios, android, web, macos, windows, linux] }
+      responses:
+        "200": { $ref: "#/components/responses/Tokens" }
+        "401": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+
+  /api/v1/auth/refresh:
+    post:
+      summary: Exchange a refresh token for new tokens (the old refresh token stops working)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Tokens" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/auth/logout:
+    post:
+      summary: Revoke the current device
+      responses:
+        "204": { description: Logged out }
+
+  /api/v1/devices/pair:
+    post:
+      summary: Exchange a pairing token (from a QR code) for device credentials
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+                device_name: { type: string }
+                platform: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Tokens" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/devices/pairing-tokens:
+    post:
+      summary: Create a one-time pairing QR code for a new device of the current user
+      responses:
+        "201":
+          description: Pairing token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  expires_at: { type: string, format: date-time }
+                  payload:
+                    type: string
+                    description: JSON-encoded PairingPayload (what the QR code contains)
+                  qr_png: { type: string, contentEncoding: base64 }
+
+  /api/v1/devices:
+    get:
+      summary: List my devices
+      responses:
+        "200":
+          description: Devices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Device" } }
+
+  /api/v1/devices/{id}:
+    delete:
+      summary: Revoke one of my devices
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "204": { description: Revoked }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /api/v1/me:
+    get:
+      summary: Current user, device, usage and spaces
+      responses:
+        "200":
+          description: Me
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user: { $ref: "#/components/schemas/User" }
+                  device: { $ref: "#/components/schemas/Device" }
+                  used_bytes: { type: integer }
+                  spaces: { type: array, items: { $ref: "#/components/schemas/Space" } }
+
+  /api/v1/spaces:
+    get:
+      summary: Shared spaces I belong to
+      responses:
+        "200":
+          description: Spaces
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/Space" } }
+
+  /api/v1/files:
+    get:
+      summary: List a folder
+      parameters:
+        - $ref: "#/components/parameters/Space"
+        - { name: path, in: query, schema: { type: string, default: "" }, description: Folder path ("" = root) }
+        - { name: after, in: query, schema: { type: string }, description: Pagination — the last name from the previous page }
+        - { name: limit, in: query, schema: { type: integer, default: 500, maximum: 5000 } }
+      responses:
+        "200":
+          description: Entries sorted by name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/File" } }
+                  next_after: { type: string }
+
+  /api/v1/files/{id}:
+    parameters:
+      - $ref: "#/components/parameters/FileID"
+    get:
+      summary: File metadata (with media info for photos)
+      responses:
+        "200":
+          description: File
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+        "404": { $ref: "#/components/responses/Error" }
+    patch:
+      summary: Rename / move within the same library or space
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path: { type: string }
+      responses:
+        "200":
+          description: Moved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+        "409": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Move to trash (directories include their contents)
+      responses:
+        "204": { description: Trashed }
+
+  /api/v1/files/{id}/content:
+    get:
+      summary: Download (supports Range, ETag = sha256)
+      parameters:
+        - $ref: "#/components/parameters/FileID"
+        - { name: download, in: query, schema: { type: string, enum: ["1"] }, description: Force attachment disposition }
+      responses:
+        "200": { description: File bytes }
+        "206": { description: Partial content }
+
+  /api/v1/files/{id}/thumbnail:
+    get:
+      summary: JPEG thumbnail (nearest configured size ≥ requested)
+      parameters:
+        - $ref: "#/components/parameters/FileID"
+        - { name: size, in: query, schema: { type: integer, default: 256 } }
+      responses:
+        "200":
+          description: JPEG
+          content:
+            image/jpeg: {}
+        "404":
+          description: "`thumbnail_pending` (try later) or `thumbnail_unavailable`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /api/v1/folders:
+    post:
+      summary: Create a folder (and parents)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                space_id: { type: integer }
+                path: { type: string }
+      responses:
+        "201":
+          description: Folder
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+
+  /api/v1/trash:
+    get:
+      summary: Trash entries (deleted items and replaced versions)
+      parameters:
+        - $ref: "#/components/parameters/Space"
+      responses:
+        "200":
+          description: Trash
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/File" } }
+                  retention_days: { type: integer }
+
+  /api/v1/trash/{id}/restore:
+    post:
+      summary: Restore a trash entry (adds " (restored)" if the path is taken)
+      parameters:
+        - $ref: "#/components/parameters/FileID"
+      responses:
+        "200":
+          description: Restored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/File" }
+
+  /api/v1/trash/{id}:
+    delete:
+      summary: Permanently delete a trash entry now
+      parameters:
+        - $ref: "#/components/parameters/FileID"
+      responses:
+        "204": { description: Purged }
+
+  /api/v1/uploads:
+    post:
+      summary: Start an upload (or finish instantly if the server already has the content)
+      description: |
+        Hash the file locally (SHA-256) first. If the server already holds
+        identical content that the dedup scope lets you see, the response is
+        `status: completed` with `deduplicated: true` and nothing needs to be
+        sent. Otherwise upload `parts` parts of `part_size` bytes (the last may
+        be shorter) and call complete. Sessions survive app restarts until
+        `expires_at`; use GET to see which parts arrived.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, size, sha256]
+              properties:
+                space_id: { type: integer }
+                path: { type: string }
+                size: { type: integer, minimum: 0 }
+                sha256: { type: string, pattern: "^[0-9a-f]{64}$" }
+                mtime: { type: string, format: date-time }
+                base_version:
+                  type: [integer, "null"]
+                  description: Version the client last synced; omit for new files
+      responses:
+        "200": { $ref: "#/components/responses/Upload" }
+        "201": { $ref: "#/components/responses/Upload" }
+        "403": { $ref: "#/components/responses/Error" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  /api/v1/uploads/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    get:
+      summary: Upload session status (which parts were received)
+      responses:
+        "200": { $ref: "#/components/responses/Upload" }
+        "410": { $ref: "#/components/responses/Error" }
+    delete:
+      summary: Abort an upload
+      responses:
+        "204": { description: Aborted }
+
+  /api/v1/uploads/{id}/parts/{n}:
+    put:
+      summary: Upload one part (idempotent)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: n, in: path, required: true, schema: { type: integer, minimum: 0 } }
+        - { name: X-Part-SHA256, in: header, schema: { type: string }, description: Optional per-part hash check }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream: {}
+      responses:
+        "204": { description: Stored }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /api/v1/uploads/{id}/complete:
+    post:
+      summary: Assemble, verify the whole-file hash, and commit
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/Upload" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
+  /api/v1/sync/have:
+    post:
+      summary: Which of these content hashes does the server already have?
+      description: Used by camera-roll backup to skip photos that are already stored.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sha256]
+              properties:
+                sha256: { type: array, maxItems: 5000, items: { type: string } }
+      responses:
+        "200":
+          description: Hashes present
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  have: { type: array, items: { type: string } }
+
+  /api/v1/sync/cursor:
+    get:
+      summary: Latest change sequence (start following changes from here after a full listing)
+      responses:
+        "200":
+          description: Cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cursor: { type: integer }
+
+  /api/v1/sync/changes:
+    get:
+      summary: Change feed after a cursor (optionally long-polling)
+      parameters:
+        - { name: cursor, in: query, schema: { type: integer, default: 0 } }
+        - { name: limit, in: query, schema: { type: integer, default: 1000, maximum: 5000 } }
+        - { name: wait, in: query, schema: { type: integer, default: 0, maximum: 60 }, description: Seconds to wait if nothing is new }
+      responses:
+        "200":
+          description: Changes in sequence order
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  changes: { type: array, items: { $ref: "#/components/schemas/Change" } }
+                  cursor: { type: integer }
+                  has_more: { type: boolean }
+
+  /api/v1/events:
+    get:
+      summary: WebSocket — pushes {"type":"changes","seq":N} when anything changes
+      description: Browsers may pass `?access_token=` since they can't set headers on WebSockets.
+      responses:
+        "101": { description: Switching protocols }
+
+  /api/v1/admin/users:
+    get:
+      summary: List users with usage
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items: { type: array, items: { $ref: "#/components/schemas/User" } }
+    post:
+      summary: Create a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                display_name: { type: string }
+                password: { type: string }
+                role: { type: string, enum: [admin, member], default: member }
+                quota_bytes: { type: integer }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /api/v1/admin/users/{id}:
+    patch:
+      summary: Update a user (role, quota, disabled, password)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name: { type: string }
+                role: { type: string, enum: [admin, member] }
+                quota_bytes: { type: integer }
+                disabled: { type: boolean }
+                password: { type: string }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+
+  /api/v1/admin/spaces:
+    get:
+      summary: List all spaces
+      responses:
+        "200": { description: Spaces }
+    post:
+      summary: Create a shared space (creator gets write access)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Space" }
+
+  /api/v1/admin/spaces/{id}/members:
+    get:
+      summary: Space members
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Members }
+
+  /api/v1/admin/spaces/{id}/members/{user}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer } }
+      - { name: user, in: path, required: true, schema: { type: integer } }
+    put:
+      summary: Grant read or write access
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permission]
+              properties:
+                permission: { type: string, enum: [read, write] }
+      responses:
+        "204": { description: Set }
+    delete:
+      summary: Remove access
+      responses:
+        "204": { description: Removed }
+
+  /api/v1/admin/health:
+    get:
+      summary: Disks, free space, SMART, job queue, warnings
+      responses:
+        "200":
+          description: Health report
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/v1/admin/reindex:
+    post:
+      summary: Rebuild the index from disk in the background
+      responses:
+        "202": { description: Started }
+        "409": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+
+  parameters:
+    Space:
+      name: space
+      in: query
+      schema: { type: integer }
+      description: Shared space id; omit for your own library
+    FileID:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer }
+
+  responses:
+    Tokens:
+      description: Credentials for this device
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Tokens" }
+    Upload:
+      description: Upload state
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Upload" }
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+
+    ServerInfo:
+      type: object
+      properties:
+        name: { type: string }
+        version: { type: string }
+        ca_sha256: { type: string }
+        setup_required: { type: boolean }
+        read_only: { type: boolean }
+        dedup_scope: { type: string, enum: [household, user] }
+        part_size: { type: integer }
+
+    PairingPayload:
+      type: object
+      description: Contents of the pairing QR code
+      properties:
+        v: { type: integer, const: 1 }
+        name: { type: string }
+        urls: { type: array, items: { type: string }, description: Try in order }
+        ca_sha256: { type: string }
+        token: { type: string }
+
+    Tokens:
+      type: object
+      properties:
+        access_token: { type: string }
+        access_expires_at: { type: string, format: date-time }
+        refresh_token: { type: string }
+        refresh_expires_at: { type: string, format: date-time }
+        device_id: { type: string }
+        user_id: { type: integer }
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        display_name: { type: string }
+        role: { type: string, enum: [admin, member] }
+        quota_bytes: { type: integer, description: 0 = unlimited }
+        disabled: { type: boolean }
+        created_at: { type: string, format: date-time }
+        used_bytes: { type: integer }
+
+    Device:
+      type: object
+      properties:
+        id: { type: string }
+        user_id: { type: integer }
+        name: { type: string }
+        platform: { type: string }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: string, format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+
+    Space:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        permission: { type: string, enum: [read, write] }
+
+    File:
+      type: object
+      properties:
+        id: { type: integer, description: Stable for the life of the file, never reused }
+        space_id: { type: integer, description: Present for files in a shared space }
+        path: { type: string }
+        name: { type: string }
+        is_dir: { type: boolean }
+        size: { type: integer }
+        mtime: { type: string, format: date-time }
+        sha256: { type: string }
+        mime: { type: string }
+        version: { type: integer, description: Increments on every content change; send as base_version }
+        seq: { type: integer }
+        state: { type: string, enum: [active, trashed] }
+        trash_reason: { type: string, enum: [deleted, replaced] }
+        trashed_at: { type: string, format: date-time }
+        media: { $ref: "#/components/schemas/MediaInfo" }
+
+    MediaInfo:
+      type: object
+      properties:
+        taken_at: { type: string, format: date-time, description: Camera wall-clock time }
+        width: { type: integer }
+        height: { type: integer }
+        orientation: { type: integer }
+        camera_make: { type: string }
+        camera_model: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+
+    Upload:
+      type: object
+      properties:
+        status: { type: string, enum: [pending, completed] }
+        upload_id: { type: string }
+        part_size: { type: integer }
+        parts: { type: integer }
+        received: { type: array, items: { type: integer } }
+        expires_at: { type: string, format: date-time }
+        file: { $ref: "#/components/schemas/File" }
+        deduplicated: { type: boolean, description: Stored by linking existing content }
+        conflict: { type: boolean, description: Stored under a conflict name }
+        unchanged: { type: boolean, description: Identical content was already at this path }
+
+    Change:
+      type: object
+      properties:
+        seq: { type: integer }
+        op: { type: string, enum: [create, update, move, trash, restore, delete] }
+        file_id: { type: integer }
+        space_id: { type: integer }
+        path: { type: string }
+        old_path: { type: string }
+        at: { type: string, format: date-time }
+        file:
+          $ref: "#/components/schemas/File"
+          description: Current state of the file (absent once purged)
+
+    Health:
+      type: object
+      properties:
+        ok: { type: boolean }
+        read_only: { type: boolean }
+        volumes: { type: array, items: { $ref: "#/components/schemas/VolumeStatus" } }
+        state: { $ref: "#/components/schemas/VolumeStatus" }
+        smart: { type: array, items: { type: object } }
+        jobs: { type: object, additionalProperties: { type: integer } }
+        warnings: { type: array, items: { type: string } }
+        at: { type: string, format: date-time }
+
+    VolumeStatus:
+      type: object
+      properties:
+        path: { type: string }
+        role: { type: string }
+        ok: { type: boolean }
+        id: { type: string }
+        problem: { type: string }
+        free_bytes: { type: integer }
+        total_bytes: { type: integer }
