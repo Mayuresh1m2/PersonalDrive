@@ -25,4 +25,6 @@ jobs:
       - run: make -C server build
       - run: pnpm -r typecheck
       - run: pnpm -r test
-      - run: pnpm -r build
+      - run: pnpm --filter @pdrive/client --filter @pdrive/web build
+      - name: Bundle the mobile app (JS only; native builds need device SDKs)
+        run: pnpm --filter @pdrive/mobile bundle

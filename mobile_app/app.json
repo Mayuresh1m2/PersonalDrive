@@ -1,0 +1,30 @@
+{
+  "expo": {
+    "name": "PersonalDrive",
+    "slug": "personaldrive",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "bundleIdentifier": "app.personaldrive.mobile",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "PersonalDrive backs up your photos and videos to your home server.",
+        "NSCameraUsageDescription": "The camera scans the pairing code shown by your PersonalDrive server.",
+        "NSLocalNetworkUsageDescription": "PersonalDrive talks to your server on the home network.",
+        "UIBackgroundModes": ["processing", "fetch"]
+      }
+    },
+    "android": {
+      "package": "app.personaldrive.mobile",
+      "permissions": ["READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO", "ACCESS_MEDIA_LOCATION", "CAMERA", "ACCESS_NETWORK_STATE"]
+    },
+    "plugins": [
+      ["expo-camera", { "cameraPermission": "The camera scans the pairing code shown by your PersonalDrive server." }],
+      ["expo-media-library", { "photosPermission": "PersonalDrive backs up your photos and videos to your home server.", "isAccessMediaLocationEnabled": true, "granularPermissions": ["photo", "video"] }],
+      "expo-background-task",
+      "expo-secure-store",
+      "./plugins/withUserCAs"
+    ]
+  }
+}
