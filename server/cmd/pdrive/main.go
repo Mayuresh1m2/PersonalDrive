@@ -34,7 +34,7 @@ func main() {
 	root.PersistentFlags().BoolVar(&logJSON, "log-json", false, "log as JSON (for journald/log shippers)")
 
 	root.AddCommand(serveCmd(), initCmd(), versionCmd(), volumeCmd(), userCmd(), spaceCmd(), pairCmd(),
-		reindexCmd(), importCmd(), dupesCmd())
+		reindexCmd(), importCmd(), dupesCmd(), backupCmd(), restoreCmd())
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)

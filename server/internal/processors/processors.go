@@ -92,6 +92,39 @@ func (r *Runner) Enqueue(ctx context.Context, sha, mime, only string) error {
 	return nil
 }
 
+// Backfill enqueues work for content that a processor hasn't handled at its
+// current version (new processors, or thumbnails after a restore).
+func (r *Runner) Backfill(ctx context.Context) (int, error) {
+	n := 0
+	for name, p := range r.procs {
+		rows, err := r.db.SQL().QueryContext(ctx,
+			`SELECT DISTINCT f.sha256, f.mime FROM files f
+			 LEFT JOIN processor_state ps ON ps.processor = ? AND ps.sha256 = f.sha256 AND ps.version >= ?
+			 WHERE f.state = 'active' AND f.is_dir = 0 AND f.sha256 IS NOT NULL AND ps.sha256 IS NULL`, name, p.Version())
+		if err != nil {
+			return n, err
+		}
+		type item struct{ sha, mime string }
+		var todo []item
+		for rows.Next() {
+			var it item
+			if err := rows.Scan(&it.sha, &it.mime); err != nil {
+				rows.Close()
+				return n, err
+			}
+			todo = append(todo, it)
+		}
+		rows.Close()
+		for _, it := range todo {
+			if err := r.Enqueue(ctx, it.sha, it.mime, name); err != nil {
+				return n, err
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (r *Runner) handle(ctx context.Context, j jobs.Job) error {
 	var pl payload
 	if err := json.Unmarshal(j.Payload, &pl); err != nil {

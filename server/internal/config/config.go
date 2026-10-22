@@ -24,6 +24,7 @@ type Config struct {
 	Auth       AuthConfig       `yaml:"auth"`
 	Processing ProcessingConfig `yaml:"processing"`
 	Health     HealthConfig     `yaml:"health"`
+	Backup     BackupConfig     `yaml:"backup"`
 
 	// file is the path the config was loaded from, if any.
 	file string
@@ -91,6 +92,102 @@ type HealthConfig struct {
 	MinFreeBytes int64 `yaml:"min_free_bytes"`
 }
 
+// BackupConfig configures backup targets (Phase 2).
+type BackupConfig struct {
+	// PassphraseFile holds the repository passphrase so scheduled backups can
+	// run unattended (0600, on the laptop SSD). Default: <state>/secrets/backup-passphrase.
+	PassphraseFile string `yaml:"passphrase_file"`
+	// PackSize is the target size of pack objects. Larger packs mean fewer
+	// (expensive) cold-tier PUT requests.
+	PackSize int64          `yaml:"pack_size"`
+	Targets  []BackupTarget `yaml:"targets"`
+	Notify   NotifyConfig   `yaml:"notify"`
+}
+
+type BackupTarget struct {
+	Name string `yaml:"name"`
+	Type string `yaml:"type"` // local | s3
+	// local
+	Path string `yaml:"path,omitempty"`
+	// s3 and S3-compatible
+	Bucket          string `yaml:"bucket,omitempty"`
+	Prefix          string `yaml:"prefix,omitempty"`
+	Region          string `yaml:"region,omitempty"`
+	Endpoint        string `yaml:"endpoint,omitempty"`
+	AccessKeyID     string `yaml:"access_key_id,omitempty"`
+	SecretAccessKey string `yaml:"secret_access_key,omitempty"`
+	PathStyle       bool   `yaml:"path_style,omitempty"`
+	// StorageClass for file content (cold) packs, e.g. DEEP_ARCHIVE,
+	// GLACIER_IR, STANDARD_IA, STANDARD. Metadata always uses STANDARD.
+	StorageClass   string    `yaml:"storage_class,omitempty"`
+	BandwidthLimit int64     `yaml:"bandwidth_limit,omitempty"` // bytes/second, 0 = unlimited
+	Schedule       string    `yaml:"schedule,omitempty"`        // cron, e.g. "0 2 * * *"
+	PruneSchedule  string    `yaml:"prune_schedule,omitempty"`
+	CheckSchedule  string    `yaml:"check_schedule,omitempty"`
+	Retention      Retention `yaml:"retention,omitempty"`
+}
+
+type Retention struct {
+	Last    int `yaml:"last,omitempty"`
+	Hourly  int `yaml:"hourly,omitempty"`
+	Daily   int `yaml:"daily,omitempty"`
+	Weekly  int `yaml:"weekly,omitempty"`
+	Monthly int `yaml:"monthly,omitempty"`
+	Yearly  int `yaml:"yearly,omitempty"`
+}
+
+type NotifyConfig struct {
+	// NtfyURL, e.g. https://ntfy.sh/my-secret-topic, gets a push on failures.
+	NtfyURL    string `yaml:"ntfy_url,omitempty"`
+	WebhookURL string `yaml:"webhook_url,omitempty"` // JSON POST
+	// StaleAfter alerts when a target hasn't succeeded for this long.
+	StaleAfter Duration `yaml:"stale_after,omitempty"`
+}
+
+// Target returns the backup target with the given name.
+func (c *Config) Target(name string) (*BackupTarget, error) {
+	for i := range c.Backup.Targets {
+		if c.Backup.Targets[i].Name == name {
+			return &c.Backup.Targets[i], nil
+		}
+	}
+	return nil, fmt.Errorf("no backup target named %q in config", name)
+}
+
+// ApplyDefaults fills in per-type defaults.
+func (t *BackupTarget) ApplyDefaults() {
+	switch t.Type {
+	case "local":
+		if t.Schedule == "" {
+			t.Schedule = "0 * * * *" // hourly: local backups are free
+		}
+		if t.Retention == (Retention{}) {
+			t.Retention = Retention{Hourly: 24, Daily: 14, Weekly: 8, Monthly: 24, Yearly: 10}
+		}
+		if t.CheckSchedule == "" {
+			t.CheckSchedule = "30 4 * * 0"
+		}
+	case "s3":
+		if t.StorageClass == "" {
+			t.StorageClass = "DEEP_ARCHIVE"
+		}
+		if t.Schedule == "" {
+			t.Schedule = "0 2 * * *" // nightly
+		}
+		if t.Retention == (Retention{}) {
+			// Deep Archive bills 180 days minimum, so keeping months of
+			// snapshots costs almost nothing extra.
+			t.Retention = Retention{Daily: 7, Weekly: 8, Monthly: 12, Yearly: 5}
+		}
+		if t.CheckSchedule == "" {
+			t.CheckSchedule = "0 5 1 * *"
+		}
+	}
+	if t.PruneSchedule == "" {
+		t.PruneSchedule = "0 4 * * 0" // weekly
+	}
+}
+
 // Duration is a time.Duration that unmarshals from strings like "720h" or "15m".
 type Duration time.Duration
 
@@ -139,6 +236,10 @@ func Default() *Config {
 			ThumbnailSizes: []int{256, 1024},
 		},
 		Health: HealthConfig{MinFreeBytes: 10 << 30},
+		Backup: BackupConfig{
+			PackSize: 32 << 20,
+			Notify:   NotifyConfig{StaleAfter: Duration(48 * time.Hour)},
+		},
 	}
 }
 
@@ -204,7 +305,16 @@ func Read(path string) (*Config, error) {
 	cfg.applyEnv()
 	cfg.Paths.State = expandHome(cfg.Paths.State)
 	cfg.Paths.Library = expandHome(cfg.Paths.Library)
+	cfg.Backup.PassphraseFile = expandHome(cfg.Backup.PassphraseFile)
 	return cfg, nil
+}
+
+// PassphrasePath is where the backup passphrase is kept.
+func (c *Config) PassphrasePath() string {
+	if c.Backup.PassphraseFile != "" {
+		return c.Backup.PassphraseFile
+	}
+	return c.StatePath("secrets", "backup-passphrase")
 }
 
 // File returns the path the config was loaded from ("" if defaults only).
@@ -251,6 +361,25 @@ func (c *Config) Validate() error {
 	}
 	if c.Processing.Workers < 1 {
 		errs = append(errs, errors.New("processing.workers must be >= 1"))
+	}
+	names := map[string]bool{}
+	for i := range c.Backup.Targets {
+		t := &c.Backup.Targets[i]
+		switch {
+		case t.Name == "" || strings.ContainsAny(t.Name, " /"):
+			errs = append(errs, fmt.Errorf("backup target %d needs a name without spaces or slashes", i+1))
+		case names[t.Name]:
+			errs = append(errs, fmt.Errorf("duplicate backup target %q", t.Name))
+		case t.Type == "local" && t.Path == "":
+			errs = append(errs, fmt.Errorf("backup target %q: path is required", t.Name))
+		case t.Type == "s3" && t.Bucket == "":
+			errs = append(errs, fmt.Errorf("backup target %q: bucket is required", t.Name))
+		case t.Type != "local" && t.Type != "s3":
+			errs = append(errs, fmt.Errorf("backup target %q: type must be local or s3", t.Name))
+		}
+		names[t.Name] = true
+		t.Path = expandHome(t.Path)
+		t.ApplyDefaults()
 	}
 	return errors.Join(errs...)
 }

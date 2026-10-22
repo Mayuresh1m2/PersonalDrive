@@ -13,7 +13,7 @@ export PDRIVE_CONFIG="$DEMO/config.yaml"
 PORT=18543
 URL="https://localhost:$PORT"
 CURL=(curl -sS --cacert "$DEMO/state/tls/ca.pem")
-trap 'kill "${SERVER_PID:-0}" 2>/dev/null || true; rm -rf "$DEMO"' EXIT
+trap '[[ -n "${SERVER_PID:-}" ]] && kill "$SERVER_PID" 2>/dev/null; rm -rf "$DEMO"' EXIT
 json() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
 step() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 

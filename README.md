@@ -24,6 +24,13 @@ cloud storage keeps getting more expensive while raw storage (local disks, S3 De
 The full spec and the agreed decisions are in
 [`docs/prompts/01-home-server-and-s3-backup.md`](docs/prompts/01-home-server-and-s3-backup.md).
 
+## Docs
+
+- [Running the server on a laptop](docs/LAPTOP_SERVER.md)
+- [Backups to disk B and S3](docs/BACKUP.md), and the [disaster recovery runbook](docs/RECOVERY.md)
+- [Architecture](docs/ARCHITECTURE.md), [backup format](docs/BACKUP_FORMAT.md), [decisions (ADRs)](docs/adr/)
+- API: [`shared_lib/api/openapi.yaml`](shared_lib/api/openapi.yaml)
+
 ## Project structure
 
 | Path | Contents |

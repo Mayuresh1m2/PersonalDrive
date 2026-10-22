@@ -40,3 +40,31 @@ processing:
 health:
   smart_devices: []           # e.g. [/dev/sdb, /dev/sdc] — needs smartctl and usually root
   min_free_bytes: 10737418240 # warn below 10 GiB free
+
+backup:
+  passphrase_file: ""         # default <state>/secrets/backup-passphrase (0600)
+  pack_size: 33554432         # 32 MiB packs: fewer cold-tier PUT requests
+  targets:
+    - name: disk-b
+      type: local
+      path: /mnt/pdrive-b/backup        # run: pdrive volume init --role backup <path>
+      schedule: "0 * * * *"             # hourly (default for local)
+      retention: {hourly: 24, daily: 14, weekly: 8, monthly: 24, yearly: 10}
+    - name: s3
+      type: s3
+      bucket: my-pdrive-backup
+      prefix: home
+      region: ap-south-1
+      endpoint: ""                      # set for B2 / R2 / Wasabi / MinIO
+      access_key_id: ""                 # empty = AWS env / ~/.aws credentials
+      secret_access_key: ""
+      storage_class: DEEP_ARCHIVE       # content packs; metadata always STANDARD
+      bandwidth_limit: 0                # bytes/s, 0 = unlimited
+      schedule: "0 2 * * *"             # nightly (default for s3)
+      prune_schedule: "0 4 * * 0"       # weekly
+      check_schedule: "0 5 1 * *"       # monthly
+      retention: {daily: 7, weekly: 8, monthly: 12, yearly: 5}
+  notify:
+    ntfy_url: ""              # e.g. https://ntfy.sh/<long-random-topic>
+    webhook_url: ""
+    stale_after: 48h
