@@ -23,6 +23,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: make -C server build
+      - name: Build the shared SDK (apps type-check against its dist/)
+        run: pnpm --filter @pdrive/client build
       - run: pnpm -r typecheck
       - run: pnpm -r test
       - run: pnpm --filter @pdrive/client --filter @pdrive/web build
