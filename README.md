@@ -17,8 +17,9 @@ cloud storage keeps getting more expensive while raw storage (local disks, S3 De
 - **Backups are incremental, deduplicated, compressed and encrypted**, written on a schedule to a
   local backup disk and to S3.
 - **One bootstrap script** rebuilds a server on a new machine from the backup.
-- **Client apps** (`mobile_app`, `web_app`, `desktop_app`, `mac_app`, sharing `shared_lib`) sync
-  to the home server and auto-backup phone photos.
+- **Client apps**: a web app built into the server, `pdrive-sync` two-way folder sync for
+  Linux/macOS/Windows (`desktop_app`), and phone camera-roll backup (`mobile_app`), sharing
+  `shared_lib`.
 - **Later**: local-only AI for searching photos, memories, and organising documents and bills.
 
 The full spec and the agreed decisions are in
@@ -37,7 +38,9 @@ The full spec and the agreed decisions are in
 | --- | --- |
 | `server/` | Go home server (`pdrived`) and admin/backup CLI (`pdrive`) |
 | `shared_lib/` | OpenAPI spec and shared client code |
-| `mobile_app/`, `web_app/`, `desktop_app/`, `mac_app/` | Client applications |
+| `web_app/` | Browser app (embedded in the server binary) |
+| `desktop_app/` | `pdrive-sync`: two-way folder sync agent (Go; Linux/macOS/Windows) |
+| `mobile_app/` | Phone app (camera-roll backup) |
 | `scripts/` | Bootstrap / restore-to-new-machine script |
 | `deploy/` | systemd unit, docker-compose (MinIO for tests) |
 | `docs/` | Architecture, backup format, recovery runbook, ADRs |
