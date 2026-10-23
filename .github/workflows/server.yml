@@ -1,0 +1,26 @@
+name: server
+
+on:
+  push:
+    branches: [main]
+    paths: ["server/**", "shared_lib/api/**", ".github/workflows/server.yml"]
+  pull_request:
+    paths: ["server/**", "shared_lib/api/**", ".github/workflows/server.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: make vet
+      - run: make test-race
+      - run: make build-all
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

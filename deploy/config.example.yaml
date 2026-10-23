@@ -1,0 +1,42 @@
+# PersonalDrive configuration — every key is optional except paths.library.
+# Default location: ~/.config/pdrive/config.yaml (or $PDRIVE_CONFIG, or /etc/pdrive/config.yaml).
+# Env overrides: PDRIVE_LIBRARY, PDRIVE_STATE, PDRIVE_LISTEN, PDRIVE_TLS, PDRIVE_MDNS.
+
+server:
+  name: home-drive            # shown in apps and advertised over mDNS (default: hostname)
+  listen: ":8443"             # bind to a LAN address in production, e.g. 192.168.1.160:8443
+  tls: true                   # private CA; clients pin it via the pairing QR code
+  mdns: true                  # advertise _pdrive._tcp on the LAN
+  public_url: ""              # override URL in pairing QR codes (e.g. https://home-drive.local:8443)
+  metrics: true               # Prometheus metrics at /metrics
+
+paths:
+  state: ~/.local/share/pdrive     # laptop SSD: DB, secrets, TLS, thumbnails, upload staging
+  library: /mnt/pdrive-a/library   # external disk A: the primary library
+
+dedup:
+  on_disk: auto               # auto | reflink | hardlink | off
+  scope: household            # household | user (see docs/adr/0001)
+
+trash:
+  retention: 720h             # 30 days
+
+uploads:
+  part_size: 8388608          # 8 MiB parts
+  expiry: 24h                 # abandoned upload sessions are cleaned up after this
+
+auth:
+  access_ttl: 15m
+  refresh_ttl: 2160h          # 90 days; refreshing extends it
+  pairing_ttl: 10m
+  login_rate_per_minute: 10
+  password_min_chars: 10
+
+processing:
+  workers: 2
+  thumbnail_sizes: [256, 1024]
+  ffmpeg_path: ""             # auto-detected; needed for HEIC and video thumbnails
+
+health:
+  smart_devices: []           # e.g. [/dev/sdb, /dev/sdc] — needs smartctl and usually root
+  min_free_bytes: 10737418240 # warn below 10 GiB free
