@@ -257,7 +257,7 @@ export function Browser({ spaces }: { spaces: Space[] }) {
       )}
       <p className="muted small" style={{ marginTop: 16 }}>
         {touch ? "Tap to open, long-press to select." : "Double-click to open."} {canWrite && "Drag files or whole folders anywhere to upload. "}
-        <Link to="/trash">Trash</Link> keeps deleted files for 30 days.
+        Deleted files go to the <Link to="/trash">Trash</Link>, where you can restore them.
       </p>
 
       {dragging && <div className="dropzone">Drop to upload to {dir || (space?.name ?? "My files")}</div>}

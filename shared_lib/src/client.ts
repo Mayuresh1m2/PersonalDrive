@@ -309,7 +309,7 @@ export class PDriveClient {
   }
 
   listTrash(spaceId?: number) {
-    return this.request<{ items: FileEntry[]; retention_days: number }>("GET", "/api/v1/trash", {
+    return this.request<{ items: FileEntry[]; retention_days: number; permanent_delete: boolean }>("GET", "/api/v1/trash", {
       query: { space: spaceId },
     });
   }

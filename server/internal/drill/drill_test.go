@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -205,6 +206,13 @@ func TestDisasterDrill(t *testing.T) {
 	if rep, err := a.Backup.Check(ctx, "offsite", a.Backup.ScheduledCheckOptions(&old.cfg.Backup.Targets[0])); err != nil || !rep.OK() {
 		t.Fatalf("check before disaster: %v %+v", err, rep)
 	}
+	if _, err := a.Backup.Prune(ctx, "offsite", false); !errors.Is(err, backupsvc.ErrPruneDisabled) {
+		t.Fatalf("prune must be refused in safe mode, got %v", err)
+	}
+	if _, err := a.Backup.Prune(ctx, "offsite", true); err != nil {
+		t.Fatal("dry-run prune should still work:", err)
+	}
+	old.cfg.Safety.PruneBackups = true
 	if _, err := a.Backup.Prune(ctx, "offsite", false); err != nil {
 		t.Fatal(err)
 	}
@@ -219,6 +227,7 @@ func TestDisasterDrill(t *testing.T) {
 
 	// ---- Machine 2: rebuilt from the recovery kit ----------------------------------
 	nm := newMachine(t, "new", target)
+	volume.Init(nm.lib, volume.RoleLibrary) // someone ran `pdrive init` on the new disk first
 	kit, err := backupsvc.ReadKit(kitPath)
 	if err != nil {
 		t.Fatal(err)

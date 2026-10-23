@@ -495,3 +495,45 @@ func TestWebUIAndMediaTokens(t *testing.T) {
 		t.Fatalf("query token accepted on /me: %d", resp.StatusCode)
 	}
 }
+
+func TestSafetyGates(t *testing.T) {
+	e := newEnv(t)
+	alice := e.admin()
+	var info struct {
+		Safety map[string]bool `json:"safety"`
+	}
+	(&client{e: e}).do("GET", "/api/v1/server", nil, &info)
+	for _, k := range []string{"purge_trash", "permanent_delete", "prune_backups", "free_up_space"} {
+		if v, ok := info.Safety[k]; !ok || v {
+			t.Fatalf("safety.%s should default to off, got %v (present %v)", k, v, ok)
+		}
+	}
+
+	res, _ := alice.upload(0, "keep-me.txt", []byte("precious"), nil)
+	alice.do("DELETE", fmt.Sprintf("/api/v1/files/%d", res.File.ID), nil, nil)
+	var errResp struct{ Error struct{ Code string } }
+	if code := alice.do("DELETE", fmt.Sprintf("/api/v1/trash/%d", res.File.ID), nil, &errResp); code != 403 || errResp.Error.Code != "disabled_by_safety" {
+		t.Fatalf("permanent delete must be refused by default: %d %s", code, errResp.Error.Code)
+	}
+	var trash struct {
+		Items         []fileResp
+		RetentionDays int  `json:"retention_days"`
+		Permanent     bool `json:"permanent_delete"`
+	}
+	alice.do("GET", "/api/v1/trash", nil, &trash)
+	if len(trash.Items) != 1 || trash.RetentionDays != 0 || trash.Permanent {
+		t.Fatalf("trash should be kept forever in safe mode: %+v", trash)
+	}
+	// Hourly maintenance must not empty the trash, however old it is.
+	e.app.Cfg.Trash.Retention = 0
+	e.app.RunMaintenance(context.Background())
+	alice.do("GET", "/api/v1/trash", nil, &trash)
+	if len(trash.Items) != 1 {
+		t.Fatal("trash was purged in safe mode")
+	}
+
+	e.app.Cfg.Safety.PermanentDelete = true
+	if code := alice.do("DELETE", fmt.Sprintf("/api/v1/trash/%d", res.File.ID), nil, nil); code != 204 {
+		t.Fatalf("permanent delete once enabled: %d", code)
+	}
+}

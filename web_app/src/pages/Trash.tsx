@@ -7,7 +7,8 @@ import { bytes, date, errorMessage } from "../format";
 export function Trash({ spaces }: { spaces: Space[] }) {
   const [spaceId, setSpaceId] = useState<number | undefined>();
   const [items, setItems] = useState<FileEntry[]>([]);
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(0);
+  const [canPurge, setCanPurge] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -15,6 +16,7 @@ export function Trash({ spaces }: { spaces: Space[] }) {
       const r = await client.listTrash(spaceId);
       setItems(r.items);
       setDays(r.retention_days);
+      setCanPurge(r.permanent_delete);
       setError("");
     } catch (e) {
       setError(errorMessage(e));
@@ -41,8 +43,9 @@ export function Trash({ spaces }: { spaces: Space[] }) {
         </select>
       </div>
       <p className="muted" style={{ margin: 0 }}>
-        Deleted items and previous versions of edited files are kept for {days} days, then removed for good.
-        They also stay in older backups.
+        {days > 0
+          ? `Deleted items and previous versions of edited files are kept for ${days} days, then removed for good. They also stay in older backups.`
+          : "Deleted items and previous versions of edited files are kept here until you restore them. Nothing is removed automatically."}
       </p>
       {error && <div className="banner error">{error}</div>}
       <div className="card" style={{ padding: 0 }}>
@@ -61,7 +64,9 @@ export function Trash({ spaces }: { spaces: Space[] }) {
                   <td style={{ textAlign: "right" }}>
                     <div className="row" style={{ justifyContent: "flex-end" }}>
                       <button onClick={() => act(() => client.restoreFromTrash(f.id!))}>Restore</button>
-                      <button className="danger" onClick={() => confirm(`Delete "${f.name}" forever?`) && act(() => client.purge(f.id!))}>Delete forever</button>
+                      {canPurge && (
+                        <button className="danger" onClick={() => confirm(`Delete "${f.name}" forever? This cannot be undone.`) && act(() => client.purge(f.id!))}>Delete forever</button>
+                      )}
                     </div>
                   </td>
                 </tr>

@@ -30,12 +30,27 @@ import (
 	"github.com/Mayuresh1m2/PersonalDrive/desktop_app/internal/client"
 )
 
+// Sync modes.
+const (
+	// ModeUploadOnly copies local files to the server and never changes or
+	// deletes anything on either side. The safe default.
+	ModeUploadOnly = "upload-only"
+	// ModeTwoWay also brings server changes down.
+	ModeTwoWay = "two-way"
+)
+
 // Pair is one synced folder.
 type Pair struct {
 	Local   string `json:"local"`
 	Remote  string `json:"remote"`   // folder in the library ("" = whole library)
 	SpaceID int64  `json:"space_id"` // 0 = own library
+	Mode    string `json:"mode,omitempty"`
+	// SyncDeletes propagates deletions in two-way mode. Off: a file deleted
+	// on one side is left alone on the other (and not brought back).
+	SyncDeletes bool `json:"sync_deletes,omitempty"`
 }
+
+func (p Pair) uploadOnly() bool { return p.Mode != ModeTwoWay }
 
 func (p Pair) key() string {
 	h := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", p.Local, p.Remote, p.SpaceID)))
@@ -50,6 +65,9 @@ type Entry struct {
 	SHA256  string `json:"sha,omitempty"`
 	Size    int64  `json:"size,omitempty"`
 	MTimeNs int64  `json:"mtime,omitempty"` // local mtime when last synced
+	// Gone records a deletion that was deliberately not propagated:
+	// "local" (deleted here, kept on the server) or "remote".
+	Gone string `json:"gone,omitempty"`
 }
 
 type state struct {
@@ -425,6 +443,14 @@ func (s *Syncer) reconcile(ctx context.Context, rel string, local map[string]loc
 		(b.IsDir != l.IsDir || (!l.IsDir && (b.Size != l.Size || b.MTimeNs != l.MTimeNs))))
 	remoteChanged := (b == nil) != (r == nil) || (b != nil && r != nil && (b.FileID != r.ID || b.Version != r.Version || b.IsDir != r.IsDir))
 
+	// A deletion we chose not to propagate: stay put until something changes.
+	if b != nil && b.Gone == "local" && !hasLocal {
+		localChanged = false
+	}
+	if b != nil && b.Gone == "remote" && r == nil {
+		remoteChanged = false
+	}
+
 	// A touched mtime with identical content isn't a change.
 	var localSHA string
 	if localChanged && hasLocal && !l.IsDir && b != nil && !b.IsDir && b.Size == l.Size {
@@ -443,13 +469,29 @@ func (s *Syncer) reconcile(ctx context.Context, rel string, local map[string]loc
 
 	case localChanged && !remoteChanged:
 		if !hasLocal {
-			return r != nil, nil // deleted locally → delete on server (later)
+			if r != nil && !s.Pair.uploadOnly() && s.Pair.SyncDeletes {
+				return true, nil // deleted locally → delete on server (later)
+			}
+			b.Gone = "local" // keep the server copy
+			return false, nil
 		}
 		return false, s.push(ctx, rel, l, b, localSHA, local, look, rep)
 
 	case !localChanged && remoteChanged:
+		if s.Pair.uploadOnly() {
+			if r == nil && b != nil {
+				b.Gone = "remote" // keep the local copy, don't re-upload it
+			}
+			return false, nil
+		}
 		if r == nil {
-			return hasLocal, nil // deleted on server → remove locally (later)
+			if hasLocal && s.Pair.SyncDeletes {
+				return true, nil // deleted on server → remove locally (later)
+			}
+			if b != nil {
+				b.Gone = "remote"
+			}
+			return false, nil
 		}
 		return false, s.pull(ctx, rel, r, local, false, rep)
 
@@ -457,6 +499,11 @@ func (s *Syncer) reconcile(ctx context.Context, rel string, local map[string]loc
 		switch {
 		case !hasLocal && r == nil:
 			delete(s.st.Entries, rel)
+			return false, nil
+		case !hasLocal && s.Pair.uploadOnly():
+			if b != nil {
+				b.Gone = "local"
+			}
 			return false, nil
 		case !hasLocal:
 			return false, s.pull(ctx, rel, r, local, false, rep) // deleted here, edited there: keep the edit
@@ -532,6 +579,12 @@ func (s *Syncer) push(ctx context.Context, rel string, l localInfo, b *Entry, sh
 	if res.Conflict {
 		rep.Conflicts++
 		s.Log.Warn("conflict: both sides changed; kept both", "path", rel, "copy", res.File.Path)
+		if s.Pair.uploadOnly() {
+			// Never touch local files: remember this content as synced so it
+			// isn't uploaded again.
+			s.st.Entries[rel] = &Entry{FileID: res.File.ID, Version: res.File.Version, SHA256: sha, Size: l.Size, MTimeNs: l.MTimeNs}
+			return nil
+		}
 		delete(look.dirs, parentOf(rel))
 		look.known = nil
 		cur, err := look.get(rel)

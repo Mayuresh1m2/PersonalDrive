@@ -167,6 +167,14 @@ async function backupOnce({ deadlineMs, onProgress }: { deadlineMs?: number; onP
 export async function freeUpSpace(keepDays = 30): Promise<number> {
   const client = await getClient();
   if (!client) return 0;
+  const info = await client.serverInfo();
+  if (!info.safety?.free_up_space) {
+    throw new Error("Freeing up space is turned off on the server (safety.free_up_space).");
+  }
+  const lastFull = info.last_full_backup ? Date.parse(info.last_full_backup) : null;
+  if (!lastFull) {
+    throw new Error("The server hasn't completed a backup to all its backup disks yet, so nothing can be removed from the phone.");
+  }
   const done = await loadDone();
   const assets = await listAssets(0);
   const hashes = [...new Set(Object.values(done).map((d) => d.sha256).filter((h): h is string => !!h))];
@@ -174,7 +182,7 @@ export async function freeUpSpace(keepDays = 30): Promise<number> {
   for (let i = 0; i < hashes.length; i += 1000) {
     for (const h of await client.have(hashes.slice(i, i + 1000))) onServer.add(h);
   }
-  const victims = freeable(assets, done, onServer, keepDays);
+  const victims = freeable(assets, done, onServer, keepDays, lastFull);
   if (victims.length > 0) await Asset.delete(victims.map((a) => new Asset(a.id)));
   return victims.length;
 }

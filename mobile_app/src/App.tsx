@@ -149,9 +149,11 @@ function BackupTab({ client, t }: { client: PDriveClient; t: Theme }) {
   const [status, setStatus] = useState<BackupStatus | null>(null);
   const [spaces, setSpaces] = useState<Space[]>([]);
   const [running, setRunning] = useState(false);
+  const [freeAllowed, setFreeAllowed] = useState(false);
 
   useEffect(() => {
     void loadSettings().then(setSettings);
+    void client.serverInfo().then((i) => setFreeAllowed(!!i.safety?.free_up_space), () => {});
     void client.spaces().then((s) => setSpaces(s.filter((x) => x.permission === "write")), () => {});
   }, [client]);
 
@@ -238,17 +240,33 @@ function BackupTab({ client, t }: { client: PDriveClient; t: Theme }) {
         </View>
       )}
 
-      <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, gap: 8 }]}>
-        <Text style={{ color: t.text, fontSize: 16, fontWeight: "600" }}>Free up space</Text>
-        <Text style={{ color: t.muted }}>
-          Remove photos older than 30 days from this phone, but only ones confirmed safe on the server. They stay in
-          your library.
-        </Text>
-        <Button t={t} title="Free up space" onPress={async () => {
-          const n = await freeUpSpace(30).catch((e) => (Alert.alert("Couldn't free up space", String(e)), 0));
-          Alert.alert(n ? `Removed ${n} items from this phone` : "Nothing to remove yet");
-        }} />
-      </View>
+      {freeAllowed && (
+        <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border, gap: 8 }]}>
+          <Text style={{ color: t.text, fontSize: 16, fontWeight: "600" }}>Free up space</Text>
+          <Text style={{ color: t.muted }}>
+            Removes photos older than 30 days from this phone, but only ones the server confirms it has and that are
+            already in every backup (backup disk and offsite). They stay in your library. Your phone keeps them in
+            "Recently deleted" for 30 more days.
+          </Text>
+          <Button t={t} title="Free up space" onPress={() =>
+            Alert.alert("Remove backed-up photos from this phone?", "Only photos that are safely in every backup are removed.", [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Remove",
+                style: "destructive",
+                onPress: async () => {
+                  try {
+                    const n = await freeUpSpace(30);
+                    Alert.alert(n ? `Removed ${n} items from this phone` : "Nothing is ready to remove yet");
+                  } catch (e) {
+                    Alert.alert("Nothing removed", (e as Error).message);
+                  }
+                },
+              },
+            ])
+          } />
+        </View>
+      )}
     </ScrollView>
   );
 }

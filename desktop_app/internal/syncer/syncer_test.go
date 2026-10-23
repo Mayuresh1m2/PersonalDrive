@@ -152,8 +152,9 @@ func keys(m map[string]string) []string {
 
 func TestTwoWaySync(t *testing.T) {
 	url := startServer(t)
-	laptop := newDevice(t, url, "laptop", Pair{Remote: "Sync"})
-	desktop := newDevice(t, url, "desktop", Pair{Remote: "Sync"})
+	full := Pair{Remote: "Sync", Mode: ModeTwoWay, SyncDeletes: true}
+	laptop := newDevice(t, url, "laptop", full)
+	desktop := newDevice(t, url, "desktop", full)
 
 	// Create on one side, appears on the other (folders too).
 	laptop.write("Docs/plan.txt", "v1")
@@ -231,13 +232,13 @@ func TestTwoWaySync(t *testing.T) {
 
 func TestFirstSyncWithExistingFiles(t *testing.T) {
 	url := startServer(t)
-	a := newDevice(t, url, "a", Pair{})
+	a := newDevice(t, url, "a", Pair{Mode: ModeTwoWay})
 	a.write("shared.txt", "from a")
 	a.write("same.txt", "identical")
 	a.sync()
 
 	// b already has files before its first sync: nothing may be overwritten.
-	b := newDevice(t, url, "b", Pair{})
+	b := newDevice(t, url, "b", Pair{Mode: ModeTwoWay})
 	b.write("shared.txt", "from b, different")
 	b.write("same.txt", "identical")
 	b.write("only-b.txt", "b")
@@ -275,5 +276,92 @@ func TestSettleAndIgnore(t *testing.T) {
 	items, _ := a.s.C.List(context.Background(), 0, "")
 	if len(items) != 1 || items[0].Name != "busy.mov" {
 		t.Fatalf("server has %v", items)
+	}
+}
+
+// sameFiles fails unless dir holds exactly want (rel → content).
+func sameFiles(t *testing.T, d *device, want map[string]string) {
+	t.Helper()
+	if got := d.tree(); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("%s: got %v, want %v", d.name, got, want)
+	}
+}
+
+func TestUploadOnlyNeverTouchesEitherSide(t *testing.T) {
+	url := startServer(t)
+	other := newDevice(t, url, "other", Pair{Mode: ModeTwoWay, SyncDeletes: true})
+	other.write("from-server.txt", "server file")
+	other.sync()
+
+	up := newDevice(t, url, "phone-like", Pair{}) // default mode: upload-only
+	up.write("mine.txt", "v1")
+	up.sync()
+	sameFiles(t, up, map[string]string{"mine.txt": "v1"}) // nothing downloaded
+
+	// Deleting locally does not delete on the server.
+	os.Remove(filepath.Join(up.s.Pair.Local, "mine.txt"))
+	up.sync()
+	up.sync()
+	if items, _ := up.s.C.List(context.Background(), 0, ""); len(items) != 2 {
+		t.Fatalf("server lost files: %v", items)
+	}
+	// Deleting / editing on the server doesn't touch local files.
+	up.write("keep.txt", "local copy")
+	up.sync()
+	other.sync()
+	os.Remove(filepath.Join(other.s.Pair.Local, "keep.txt"))
+	other.write("from-server.txt", "edited on server")
+	other.sync()
+	up.sync()
+	up.sync()
+	sameFiles(t, up, map[string]string{"keep.txt": "local copy"})
+	// ...and the server-side deletion isn't undone by re-uploading.
+	items, _ := up.s.C.List(context.Background(), 0, "")
+	for _, f := range items {
+		if f.Name == "keep.txt" {
+			t.Fatal("upload-only re-uploaded a file deleted on the server")
+		}
+	}
+
+	// Concurrent edit: the local edit goes up as a conflict copy, the local
+	// file is not replaced.
+	up.write("from-server.txt", "local version")
+	up.sync()
+	if up.read("from-server.txt") != "local version" {
+		t.Fatal("upload-only overwrote a local file")
+	}
+}
+
+func TestTwoWayWithoutDeletes(t *testing.T) {
+	url := startServer(t)
+	p := Pair{Mode: ModeTwoWay} // SyncDeletes off
+	a := newDevice(t, url, "a", p)
+	b := newDevice(t, url, "b", p)
+	a.write("x.txt", "x")
+	a.write("y.txt", "y")
+	converge(t, a, b)
+
+	os.Remove(filepath.Join(a.s.Pair.Local, "x.txt")) // deleted on a: kept on server and b
+	converge2 := func() {
+		for i := 0; i < 3; i++ {
+			a.sync()
+			b.sync()
+		}
+	}
+	converge2()
+	if b.read("x.txt") != "x" || a.read("x.txt") != "<missing>" {
+		t.Fatalf("deletion should not propagate, nor be undone: a=%q b=%q", a.read("x.txt"), b.read("x.txt"))
+	}
+	// Edits still flow both ways.
+	b.write("y.txt", "y2")
+	converge2()
+	if a.read("y.txt") != "y2" {
+		t.Fatal("edit did not propagate in two-way mode")
+	}
+	// If x.txt is edited elsewhere later, a gets the new version again.
+	b.write("x.txt", "x edited")
+	converge2()
+	if a.read("x.txt") != "x edited" {
+		t.Fatalf("a locally-deleted file edited elsewhere should come back: %q", a.read("x.txt"))
 	}
 }

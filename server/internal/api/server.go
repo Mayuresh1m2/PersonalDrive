@@ -51,6 +51,8 @@ type Deps struct {
 	Extra func(mux *http.ServeMux, s *Server)
 	// WebUI serves the web app for every non-API path (nil: none).
 	WebUI http.Handler
+	// LastFullBackup reports when every backup target last succeeded.
+	LastFullBackup func() *time.Time
 }
 
 type Server struct {

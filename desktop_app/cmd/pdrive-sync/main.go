@@ -190,8 +190,9 @@ func loginCmd() *cobra.Command {
 }
 
 func addCmd() *cobra.Command {
-	var remote string
+	var remote, mode string
 	var space int64
+	var syncDeletes bool
 	cmd := &cobra.Command{
 		Use:   "add LOCAL_FOLDER",
 		Short: "Sync a local folder with a server folder (default: a server folder with the same name)",
@@ -214,14 +215,22 @@ func addCmd() *cobra.Command {
 					return fmt.Errorf("%s overlaps an existing synced folder (%s)", local, p.Local)
 				}
 			}
-			c.Pairs = append(c.Pairs, syncer.Pair{Local: local, Remote: remote, SpaceID: space})
+			if mode != syncer.ModeUploadOnly && mode != syncer.ModeTwoWay {
+				return fmt.Errorf("--mode must be %s or %s", syncer.ModeUploadOnly, syncer.ModeTwoWay)
+			}
+			if syncDeletes && mode != syncer.ModeTwoWay {
+				return errors.New("--sync-deletes only applies to --mode two-way")
+			}
+			c.Pairs = append(c.Pairs, syncer.Pair{Local: local, Remote: remote, SpaceID: space, Mode: mode, SyncDeletes: syncDeletes})
 			if err := os.MkdirAll(local, 0o755); err != nil {
 				return err
 			}
-			fmt.Printf("%s ⇄ server:/%s\n", local, remote)
+			fmt.Printf("%s → server:/%s (%s%s)\n", local, remote, mode, map[bool]string{true: ", deletions synced"}[syncDeletes])
 			return c.save()
 		},
 	}
+	cmd.Flags().StringVar(&mode, "mode", syncer.ModeUploadOnly, "upload-only (never changes or deletes anything) | two-way")
+	cmd.Flags().BoolVar(&syncDeletes, "sync-deletes", false, "two-way only: also propagate deletions (removed local files go to the sync trash)")
 	cmd.Flags().StringVar(&remote, "remote", "", "server folder (\"/\" for the whole library)")
 	cmd.Flags().Int64Var(&space, "space", 0, "shared space id (default: your own library)")
 	return cmd
@@ -268,7 +277,14 @@ func statusCmd() *cobra.Command {
 			}
 			fmt.Printf("server: %s (as %s)\n", c.Server, c.Device)
 			for _, p := range c.Pairs {
-				fmt.Printf("  %s ⇄ server:/%s", p.Local, p.Remote)
+				mode := p.Mode
+				if mode == "" {
+					mode = syncer.ModeUploadOnly
+				}
+				if p.SyncDeletes {
+					mode += ", deletions synced"
+				}
+				fmt.Printf("  %s ⇄ server:/%s [%s]", p.Local, p.Remote, mode)
 				if p.SpaceID != 0 {
 					fmt.Printf(" (space %d)", p.SpaceID)
 				}

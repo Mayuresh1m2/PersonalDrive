@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
 
@@ -36,7 +37,22 @@ func (s *Server) serverInfo(w http.ResponseWriter, r *http.Request) {
 		"read_only":      s.Lib.Guard().Writable() != nil,
 		"dedup_scope":    s.Cfg.Dedup.Scope,
 		"part_size":      s.Cfg.Uploads.PartSize,
+		"safety": map[string]bool{
+			"purge_trash": s.Cfg.Safety.PurgeTrash, "permanent_delete": s.Cfg.Safety.PermanentDelete,
+			"prune_backups": s.Cfg.Safety.PruneBackups, "free_up_space": s.Cfg.Safety.FreeUpSpace,
+		},
+		"last_full_backup": s.lastFullBackup(),
 	})
+}
+
+// lastFullBackup is the oldest "last success" across all backup targets:
+// everything uploaded before it exists in every backup. nil if any target
+// has never succeeded (or none are configured).
+func (s *Server) lastFullBackup() *time.Time {
+	if s.LastFullBackup == nil {
+		return nil
+	}
+	return s.LastFullBackup()
 }
 
 func (s *Server) caPEM(w http.ResponseWriter, r *http.Request) {

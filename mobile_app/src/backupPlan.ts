@@ -44,20 +44,32 @@ export function pending(assets: AssetMeta[], done: Record<string, BackedUp>, sin
 }
 
 /**
- * Assets safe to delete from the phone: backed up, confirmed present on the
- * server (by content hash), and older than keepDays.
+ * Assets safe to delete from the phone. All of these must hold:
+ * - uploaded, and the server confirms it has that exact content (hash);
+ * - uploaded before the server's last *complete* backup, so copies exist on
+ *   the server, the local backup disk and offsite;
+ * - not edited since the upload;
+ * - older than keepDays.
  */
 export function freeable(
   assets: AssetMeta[],
   done: Record<string, BackedUp>,
   onServer: Set<string>,
   keepDays: number,
+  lastFullBackup: number | null,
   now = Date.now(),
 ): AssetMeta[] {
+  if (!lastFullBackup) return [];
   const cutoff = now - keepDays * 86_400_000;
   return assets.filter((a) => {
     const b = done[a.id];
-    return !!b?.sha256 && onServer.has(b.sha256) && (a.creationTime ?? now) < cutoff && (a.modificationTime ?? 0) <= (b.modified ?? 0);
+    return (
+      !!b?.sha256 &&
+      onServer.has(b.sha256) &&
+      b.at < lastFullBackup &&
+      (a.creationTime ?? now) < cutoff &&
+      (a.modificationTime ?? 0) <= (b.modified ?? 0)
+    );
   });
 }
 

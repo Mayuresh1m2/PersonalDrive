@@ -9,8 +9,9 @@ go build -o pdrive-sync ./cmd/pdrive-sync      # or: GOOS=darwin / GOOS=windows
 
 pdrive-sync pair '<payload>'     # from the web app: Devices → Show pairing code,
                                  # or on the server: pdrive pair <user>
-pdrive-sync add ~/PersonalDrive  # ⇄ server folder "PersonalDrive"
-pdrive-sync add ~/Documents --remote Documents
+pdrive-sync add ~/PersonalDrive  # upload-only (default): never changes or deletes anything
+pdrive-sync add ~/Documents --remote Documents --mode two-way                 # edits both ways, no deletions
+pdrive-sync add ~/Notes --mode two-way --sync-deletes                         # full mirror
 pdrive-sync once                 # sync now
 pdrive-sync run                  # keep syncing (watches files + server changes)
 pdrive-sync service              # how to start it at login (systemd / launchd / Task Scheduler)
@@ -18,6 +19,17 @@ pdrive-sync service              # how to start it at login (systemd / launchd /
 
 Pairing verifies the server's certificate against the fingerprint in the pairing
 code, then pins that CA for every connection.
+
+## Modes
+
+| Mode | Uploads | Downloads | Deletions |
+| --- | --- | --- | --- |
+| `upload-only` (default) | ✓ | — | never, either side |
+| `two-way` | ✓ | ✓ | never: a deleted file is left alone on the other side and not brought back |
+| `two-way --sync-deletes` | ✓ | ✓ | propagated; local removals go to the sync trash |
+
+The table below describes `two-way --sync-deletes`; the other modes skip the
+rows they don't allow.
 
 ## How it decides what to do
 

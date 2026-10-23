@@ -19,7 +19,15 @@ dedup:
   scope: household            # household | user (see docs/adr/0001)
 
 trash:
-  retention: 720h             # 30 days
+  retention: 720h             # 30 days (only applies once safety.purge_trash is on)
+
+# Everything that permanently deletes data is OFF until you turn it on.
+# Follow docs/ROLLOUT.md; turn these on one at a time, last of all.
+safety:
+  purge_trash: false          # empty trash entries older than trash.retention
+  permanent_delete: false     # allow "Delete forever" in the trash
+  prune_backups: false        # let retention policies delete old backup snapshots
+  free_up_space: false        # let phones delete photos that are in every backup
 
 uploads:
   part_size: 8388608          # 8 MiB parts

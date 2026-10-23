@@ -24,16 +24,21 @@ describe("camera roll backup plan", () => {
     expect(pending(assets, done, may5 - 1e9).map((x) => x.id)).toEqual(["new", "edited"]);
   });
 
-  it("only frees space for verified, old, unedited backups", () => {
+  it("only frees space for verified, fully backed-up, old, unedited photos", () => {
     const now = may5 + 60 * 86_400_000;
-    const assets = [a("ok", may5), a("recent", now - 86_400_000), a("unverified", may5), a("edited", may5, now)];
+    const backup = may5 + 2 * 86_400_000;
+    const assets = [a("ok", may5), a("recent", now - 86_400_000), a("unverified", may5), a("edited", may5, now), a("not-in-backup-yet", may5)];
     const done = {
-      ok: { path: "", sha256: "h1", modified: may5, at: 0 },
-      recent: { path: "", sha256: "h2", modified: now, at: 0 },
-      unverified: { path: "", sha256: "h3", modified: may5, at: 0 },
-      edited: { path: "", sha256: "h4", modified: may5, at: 0 },
+      ok: { path: "", sha256: "h1", modified: may5, at: may5 + 1000 },
+      recent: { path: "", sha256: "h2", modified: now, at: may5 + 1000 },
+      unverified: { path: "", sha256: "h3", modified: may5, at: may5 + 1000 },
+      edited: { path: "", sha256: "h4", modified: may5, at: may5 + 1000 },
+      "not-in-backup-yet": { path: "", sha256: "h5", modified: may5, at: backup + 1000 },
     };
-    expect(freeable(assets, done, new Set(["h1", "h2", "h4"]), 30, now).map((x) => x.id)).toEqual(["ok"]);
+    const onServer = new Set(["h1", "h2", "h4", "h5"]);
+    expect(freeable(assets, done, onServer, 30, backup, now).map((x) => x.id)).toEqual(["ok"]);
+    // No complete backup yet: nothing is ever freeable.
+    expect(freeable(assets, done, onServer, 30, null, now)).toEqual([]);
   });
 
   it("respects Wi-Fi and charging rules", () => {

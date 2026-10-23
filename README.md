@@ -27,6 +27,7 @@ The full spec and the agreed decisions are in
 
 ## Docs
 
+- **[Rolling out safely](docs/ROLLOUT.md)**: start here. All deletion features are off until you enable them.
 - [Running the server on a laptop](docs/LAPTOP_SERVER.md)
 - [Backups to disk B and S3](docs/BACKUP.md), and the [disaster recovery runbook](docs/RECOVERY.md)
 - [Architecture](docs/ARCHITECTURE.md), [backup format](docs/BACKUP_FORMAT.md), [decisions (ADRs)](docs/adr/)

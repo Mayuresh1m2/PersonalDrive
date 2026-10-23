@@ -25,6 +25,7 @@ type Config struct {
 	Processing ProcessingConfig `yaml:"processing"`
 	Health     HealthConfig     `yaml:"health"`
 	Backup     BackupConfig     `yaml:"backup"`
+	Safety     SafetyConfig     `yaml:"safety"`
 
 	// file is the path the config was loaded from, if any.
 	file string
@@ -90,6 +91,22 @@ type HealthConfig struct {
 	SmartDevices []string `yaml:"smart_devices"`
 	// MinFreeBytes raises a warning when a volume has less free space than this.
 	MinFreeBytes int64 `yaml:"min_free_bytes"`
+}
+
+// SafetyConfig gates every action that permanently deletes data. All are
+// off by default: turn each on only after the previous rollout stage has
+// proven the copies and backups are good (see docs/ROLLOUT.md).
+type SafetyConfig struct {
+	// PurgeTrash empties trash entries older than trash.retention.
+	// Off: the trash is kept forever.
+	PurgeTrash bool `yaml:"purge_trash"`
+	// PermanentDelete allows "Delete forever" from the trash.
+	PermanentDelete bool `yaml:"permanent_delete"`
+	// PruneBackups lets retention policies delete old snapshots and data
+	// from backup targets. Off: backups only ever grow.
+	PruneBackups bool `yaml:"prune_backups"`
+	// FreeUpSpace lets phones delete local photos that are backed up.
+	FreeUpSpace bool `yaml:"free_up_space"`
 }
 
 // BackupConfig configures backup targets (Phase 2).

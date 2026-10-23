@@ -229,8 +229,12 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	days := int(s.Cfg.Trash.Retention.D().Hours() / 24)
+	if !s.Cfg.Safety.PurgeTrash {
+		days = 0 // kept forever
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": toJSONList(items), "retention_days": int(s.Cfg.Trash.Retention.D().Hours() / 24),
+		"items": toJSONList(items), "retention_days": days, "permanent_delete": s.Cfg.Safety.PermanentDelete,
 	})
 }
 
@@ -250,6 +254,11 @@ func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) {
 func (s *Server) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	f, a, ok := s.fileFromPath(w, r)
 	if !ok {
+		return
+	}
+	if !s.Cfg.Safety.PermanentDelete {
+		writeErr(w, http.StatusForbidden, "disabled_by_safety",
+			"permanent deletion is turned off on this server (safety.permanent_delete); items stay in the trash")
 		return
 	}
 	if !a.Write {

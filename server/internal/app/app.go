@@ -324,7 +324,7 @@ func (a *App) APIServer(tlsMgr *tlsutil.Manager, extra func(*http.ServeMux, *api
 	return api.New(api.Deps{
 		Cfg: a.Cfg, DB: a.DB, Lib: a.Lib, Auth: a.Auth, Notifier: a.Notifier, Jobs: a.Jobs, Thumbs: a.Thumbs,
 		TLS: tlsMgr, Health: a.HealthReport, Log: a.Log, Version: Version, SetupCode: a.SetupCode,
-		Extra: extra, WebUI: webui.Handler(),
+		Extra: extra, WebUI: webui.Handler(), LastFullBackup: a.Backup.LastFullBackup,
 	})
 }
 
@@ -369,12 +369,17 @@ func (a *App) background(ctx context.Context, tlsMgr *tlsutil.Manager) {
 	}
 }
 
-// maintenance purges expired trash and abandoned uploads.
+// RunMaintenance runs the hourly housekeeping once (tests, CLI).
+func (a *App) RunMaintenance(ctx context.Context) { a.maintenance(ctx) }
+
+// maintenance purges expired trash (if allowed) and abandoned uploads.
 func (a *App) maintenance(ctx context.Context) {
-	if n, err := a.Lib.PurgeExpiredTrash(ctx); err != nil && !errors.Is(err, volume.ErrUnavailable) {
-		a.Log.Error("purging trash", "err", err)
-	} else if n > 0 {
-		a.Log.Info("purged expired trash", "entries", n)
+	if a.Cfg.Safety.PurgeTrash {
+		if n, err := a.Lib.PurgeExpiredTrash(ctx); err != nil && !errors.Is(err, volume.ErrUnavailable) {
+			a.Log.Error("purging trash", "err", err)
+		} else if n > 0 {
+			a.Log.Info("purged expired trash", "entries", n)
+		}
 	}
 	ids, err := a.DB.ExpiredUploads(ctx, time.Now())
 	if err == nil {

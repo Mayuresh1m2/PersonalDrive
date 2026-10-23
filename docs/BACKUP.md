@@ -110,7 +110,9 @@ Disk B makes most restores free and instant. S3 is for losing disk A **and** dis
 
 ## Retention and prune
 
-Prune runs weekly and after `backup run`. It keeps snapshots per the retention
+Prune is **off by default** (`safety.prune_backups: false`): backups only grow
+until you enable it (see [ROLLOUT.md](ROLLOUT.md)). `--dry-run` always works.
+Once enabled, prune runs weekly and after `backup run`. It keeps snapshots per the retention
 policy and deletes data no snapshot needs. Deep Archive bills every object for at
 least 180 days, so prune **defers** deleting packs younger than that instead of
 paying early-deletion fees, and never repacks archived data (that would need a

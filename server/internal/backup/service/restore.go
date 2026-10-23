@@ -16,6 +16,7 @@ import (
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/backup/repo"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/config"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/metadata"
+	"github.com/Mayuresh1m2/PersonalDrive/server/internal/volume"
 )
 
 // Kit is the recovery kit: everything needed to rebuild the server on a new
@@ -182,8 +183,10 @@ func RestoreMeta(ctx context.Context, r *repo.Repo, o RestoreMetaOptions) error 
 }
 
 // RestoreLibrary restores the library files and clears the restore marker
-// when complete.
+// when complete. The volume marker is always restored, so the server
+// recognises the disk even if it was initialised before the restore.
 func RestoreLibrary(ctx context.Context, r *repo.Repo, plan *engine.RestorePlan, opts engine.RestoreOptions, stateDir string) error {
+	opts.AlwaysReplace = append(opts.AlwaysReplace, volume.MarkerName)
 	if err := engine.Restore(ctx, r, plan, opts); err != nil {
 		return err
 	}

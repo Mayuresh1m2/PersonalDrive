@@ -20,7 +20,9 @@ pdrive restore --target disk-b --library /mnt/pdrive-a/library
 systemctl --user start pdrive
 ```
 
-The restore puts back the original `.pdrive-volume` marker, so the server accepts
+Restores never overwrite an existing file whose content differs from the
+backup. They list such files instead; add `--overwrite` if you really want the
+backup's version. The restore puts back the original `.pdrive-volume` marker, so the server accepts
 the new disk as the library. Files changed since the last disk-B backup (at most
 an hour old) are lost from the server, but phones still have them and will
 re-upload on their next sync.

@@ -455,3 +455,44 @@ func TestStatsSanity(t *testing.T) {
 		t.Fatal("dedup accounting wrong")
 	}
 }
+
+func TestRestoreKeepsExistingDifferentFiles(t *testing.T) {
+	f := newFixture(t, false)
+	f.write("doc.txt", []byte("backed up version"))
+	f.write("same.txt", []byte("identical"))
+	f.backup()
+	out := t.TempDir()
+	os.WriteFile(filepath.Join(out, "doc.txt"), []byte("newer local work"), 0o640)
+	os.WriteFile(filepath.Join(out, "same.txt"), []byte("identical"), 0o640)
+	opts := RestoreOptions{Snapshot: "latest", Targets: map[string]string{"library": out}, Local: true, Verify: true}
+	plan, err := PlanRestore(context.Background(), f.repo, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Restore(context.Background(), f.repo, plan, opts); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "doc.txt")); string(b) != "newer local work" {
+		t.Fatal("restore overwrote a file without --overwrite")
+	}
+	if len(plan.KeptExisting) != 1 || plan.KeptExisting[0] != "library/doc.txt" {
+		t.Fatalf("kept files not reported: %v", plan.KeptExisting)
+	}
+	// Names in AlwaysReplace are restored regardless.
+	opts.AlwaysReplace = []string{"doc.txt"}
+	plan, _ = PlanRestore(context.Background(), f.repo, opts)
+	Restore(context.Background(), f.repo, plan, opts)
+	if b, _ := os.ReadFile(filepath.Join(out, "doc.txt")); string(b) != "backed up version" {
+		t.Fatal("AlwaysReplace ignored")
+	}
+	os.WriteFile(filepath.Join(out, "doc.txt"), []byte("newer local work"), 0o640)
+	opts.AlwaysReplace = nil
+	opts.Overwrite = true
+	plan, _ = PlanRestore(context.Background(), f.repo, opts)
+	if err := Restore(context.Background(), f.repo, plan, opts); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(out, "doc.txt")); string(b) != "backed up version" {
+		t.Fatal("--overwrite did not replace the file")
+	}
+}

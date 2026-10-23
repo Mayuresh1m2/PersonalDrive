@@ -809,7 +809,10 @@ export interface paths {
                     content: {
                         "application/json": {
                             items?: components["schemas"]["File"][];
+                            /** @description 0 = kept until deleted by hand */
                             retention_days?: number;
+                            /** @description Whether "delete forever" is allowed */
+                            permanent_delete?: boolean;
                         };
                     };
                 };
@@ -1747,6 +1750,18 @@ export interface components {
             /** @enum {string} */
             dedup_scope?: "household" | "user";
             part_size?: number;
+            /** @description Which permanently-destructive features the admin has enabled (all off by default) */
+            safety?: {
+                purge_trash?: boolean;
+                permanent_delete?: boolean;
+                prune_backups?: boolean;
+                free_up_space?: boolean;
+            };
+            /**
+             * Format: date-time
+             * @description Everything uploaded before this time exists in every configured backup target
+             */
+            last_full_backup?: string | null;
         };
         /** @description Contents of the pairing QR code */
         PairingPayload: {

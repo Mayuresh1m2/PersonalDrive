@@ -206,7 +206,7 @@ func backupRunCmd() *cobra.Command {
 					continue
 				}
 				printStats(snap)
-				if !noPrune {
+				if !noPrune && svc.Cfg.Safety.PruneBackups {
 					if rep, err := svc.Prune(ctx, name, false); err != nil {
 						fmt.Fprintf(os.Stderr, "  prune failed: %v\n", err)
 					} else if len(rep.SnapshotsRemoved) > 0 || rep.PacksDeleted > 0 {
@@ -502,7 +502,7 @@ func restoreCmd() *cobra.Command {
 	var (
 		kitPath, targetName, snapshot, stateDir, libraryDir, tier string
 		include                                                   []string
-		meta, plan, noWait, yes, force, verify                    bool
+		meta, plan, noWait, yes, force, verify, overwrite         bool
 		poll                                                      time.Duration
 	)
 	cmd := &cobra.Command{
@@ -612,7 +612,7 @@ the same command again later. Restores are resumable.`,
 			abs, _ := filepath.Abs(libraryDir)
 			opts := engine.RestoreOptions{
 				Snapshot: snapshot, Targets: map[string]string{backupsvc.SourceLibrary: abs}, Include: include,
-				Tier: tier, PollInterval: poll, NoWait: noWait, Verify: verify, Pricing: engine.DefaultPricing(),
+				Tier: tier, PollInterval: poll, NoWait: noWait, Verify: verify, Overwrite: overwrite, Pricing: engine.DefaultPricing(),
 				Local: t.Type == "local", CacheDir: filepath.Join(stateDir, "backup", "restore-cache"),
 			}
 			p, err := engine.PlanRestore(ctx, r, opts)
@@ -667,6 +667,16 @@ the same command again later. Restores are resumable.`,
 				return err
 			}
 			fmt.Printf("library restored to %s\n", abs)
+			if len(p.KeptExisting) > 0 {
+				fmt.Printf("kept %d existing files that differ from the backup (re-run with --overwrite to replace them):\n", len(p.KeptExisting))
+				for i, k := range p.KeptExisting {
+					if i == 20 {
+						fmt.Printf("  ... and %d more\n", len(p.KeptExisting)-20)
+						break
+					}
+					fmt.Println("  ", k)
+				}
+			}
 			return nil
 		},
 	}
@@ -684,6 +694,7 @@ the same command again later. Restores are resumable.`,
 	f.BoolVar(&yes, "yes", false, "don't ask for confirmation")
 	f.BoolVar(&force, "force", false, "overwrite an existing database when restoring --meta")
 	f.BoolVar(&verify, "verify", false, "re-hash files that look already restored")
+	f.BoolVar(&overwrite, "overwrite", false, "replace existing files whose content differs from the backup (default: keep them and report)")
 	f.DurationVar(&poll, "poll", 15*time.Minute, "how often to check thaw progress")
 	return cmd
 }

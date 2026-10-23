@@ -340,7 +340,8 @@ paths:
                 type: object
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/File" } }
-                  retention_days: { type: integer }
+                  retention_days: { type: integer, description: "0 = kept until deleted by hand" }
+                  permanent_delete: { type: boolean, description: Whether "delete forever" is allowed }
 
   /api/v1/trash/{id}/restore:
     post:
@@ -730,6 +731,18 @@ components:
         read_only: { type: boolean }
         dedup_scope: { type: string, enum: [household, user] }
         part_size: { type: integer }
+        safety:
+          type: object
+          description: Which permanently-destructive features the admin has enabled (all off by default)
+          properties:
+            purge_trash: { type: boolean }
+            permanent_delete: { type: boolean }
+            prune_backups: { type: boolean }
+            free_up_space: { type: boolean }
+        last_full_backup:
+          type: [string, "null"]
+          format: date-time
+          description: Everything uploaded before this time exists in every configured backup target
 
     PairingPayload:
       type: object

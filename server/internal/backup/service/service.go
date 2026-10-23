@@ -324,8 +324,14 @@ func (s *Service) backup(ctx context.Context, name string, progress func(engine.
 	return snap, nil
 }
 
+// ErrPruneDisabled means safety.prune_backups is off.
+var ErrPruneDisabled = errors.New("pruning backups is turned off (safety.prune_backups); backups only grow until you enable it")
+
 // Prune applies the target's retention policy.
 func (s *Service) Prune(ctx context.Context, name string, dryRun bool) (*engine.PruneReport, error) {
+	if !dryRun && !s.Cfg.Safety.PruneBackups {
+		return nil, ErrPruneDisabled
+	}
 	unlock, err := s.lockBackups(ctx)
 	if err != nil {
 		return nil, err
@@ -414,6 +420,9 @@ func (s *Service) Start(ctx context.Context) error {
 		}
 		s.ids[name] = id
 		if _, err := s.cron.AddFunc(t.PruneSchedule, func() {
+			if !s.Cfg.Safety.PruneBackups {
+				return
+			}
 			if _, err := s.Prune(ctx, name, false); err != nil {
 				s.Log.Error("scheduled prune failed", "target", name, "err", err)
 			}
@@ -472,6 +481,22 @@ func (s *Service) Status() []TargetStatus {
 		out = append(out, st)
 	}
 	return out
+}
+
+// LastFullBackup is the oldest last-success across targets (nil if any
+// target never succeeded or none exist).
+func (s *Service) LastFullBackup() *time.Time {
+	var oldest *time.Time
+	for _, st := range s.Status() {
+		if st.LastSuccess == nil {
+			return nil
+		}
+		if oldest == nil || st.LastSuccess.Before(*oldest) {
+			t := *st.LastSuccess
+			oldest = &t
+		}
+	}
+	return oldest
 }
 
 // Warnings returns health warnings about backups.

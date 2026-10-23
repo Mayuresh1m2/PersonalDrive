@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -36,12 +37,18 @@ type RestoreOptions struct {
 	ThawDays     int
 	PollInterval time.Duration
 	NoWait       bool
-	Verify       bool   // re-hash files that look already restored
-	CacheDir     string // local pack cache
-	CacheBytes   int64
-	Pricing      Pricing
-	Local        bool // store is a local disk (no thaw, no egress costs)
-	Progress     func(RestoreProgress)
+	Verify       bool // re-hash files that look already restored
+	// Overwrite replaces existing files whose content differs from the
+	// backup. Off: such files are kept untouched and listed in KeptExisting.
+	Overwrite bool
+	// AlwaysReplace lists file names that are always restored even when a
+	// different one exists (identity markers, not user data).
+	AlwaysReplace []string
+	CacheDir      string // local pack cache
+	CacheBytes    int64
+	Pricing       Pricing
+	Local         bool // store is a local disk (no thaw, no egress costs)
+	Progress      func(RestoreProgress)
 }
 
 type RestoreProgress struct {
@@ -89,6 +96,9 @@ type RestorePlan struct {
 	ArchivedBytes  int64
 	DownloadBytes  int64
 	Estimate       Estimate
+	// KeptExisting lists files left untouched because they already existed
+	// with different content (filled in by Restore unless Overwrite is set).
+	KeptExisting []string
 
 	files []plannedFile
 	dirs  []plannedDir
@@ -331,8 +341,12 @@ func Restore(ctx context.Context, r *repo.Repo, plan *RestorePlan, opts RestoreO
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := restoreFile(ctx, r, cache, f, opts.Verify); err != nil {
+		kept, err := restoreFile(ctx, r, cache, f, opts.Overwrite || slices.Contains(opts.AlwaysReplace, filepath.Base(f.target)))
+		if err != nil {
 			return fmt.Errorf("%s: %w", f.snapPath, err)
+		}
+		if kept {
+			plan.KeptExisting = append(plan.KeptExisting, f.snapPath)
 		}
 		done += f.node.Size
 		report(RestoreProgress{Phase: "restoring", FilesDone: i + 1, FilesTotal: len(plan.files), BytesDone: done, BytesTotal: total, Current: f.snapPath})
@@ -347,13 +361,25 @@ func Restore(ctx context.Context, r *repo.Repo, plan *RestorePlan, opts RestoreO
 	return nil
 }
 
-func restoreFile(ctx context.Context, r *repo.Repo, cache *packCache, f plannedFile, verify bool) error {
-	if verify {
+// restoreFile writes one file. It never replaces an existing file with
+// different content unless overwrite is set; it reports kept=true instead.
+func restoreFile(ctx context.Context, r *repo.Repo, cache *packCache, f plannedFile, overwrite bool) (kept bool, err error) {
+	if st, err := os.Lstat(f.target); err == nil {
+		if !st.Mode().IsRegular() {
+			return true, nil
+		}
 		if sum, err := hashFile(f.target); err == nil && sum == f.node.SHA256 {
 			os.Chtimes(f.target, f.node.MTime, f.node.MTime)
-			return nil
+			return false, nil
+		}
+		if !overwrite {
+			return true, nil
 		}
 	}
+	return false, writeRestored(ctx, r, cache, f)
+}
+
+func writeRestored(ctx context.Context, r *repo.Repo, cache *packCache, f plannedFile) error {
 	if err := os.MkdirAll(filepath.Dir(f.target), 0o750); err != nil {
 		return err
 	}
