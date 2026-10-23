@@ -19,10 +19,13 @@ import (
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/tlsutil"
 )
 
+// stdin is shared so successive prompts fed from a pipe each get one line.
+var stdin = bufio.NewReader(os.Stdin)
+
 // readPassword prompts twice on a terminal, or reads one line from stdin.
 func readPassword(prompt string) (string, error) {
 	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+		line, err := stdin.ReadString('\n')
 		if err != nil && line == "" {
 			return "", err
 		}

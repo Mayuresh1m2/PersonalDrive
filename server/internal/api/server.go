@@ -49,6 +49,10 @@ type Deps struct {
 	SetupCode func() string
 	// Extra lets later phases (backup) register more routes on the mux.
 	Extra func(mux *http.ServeMux, s *Server)
+	// WebUI serves the web app for every non-API path (nil: none).
+	WebUI http.Handler
+	// LastFullBackup reports when every backup target last succeeded.
+	LastFullBackup func() *time.Time
 }
 
 type Server struct {
@@ -97,8 +101,9 @@ func (s *Server) Handler() http.Handler {
 
 	authed("GET /api/v1/files", s.listFiles)
 	authed("GET /api/v1/files/{id}", s.getFile)
-	authed("GET /api/v1/files/{id}/content", s.fileContent)
-	authed("GET /api/v1/files/{id}/thumbnail", s.thumbnail)
+	// <img>/<video> can't send headers, so these also accept ?access_token=.
+	mux.Handle("GET /api/v1/files/{id}/content", s.requireAuthQuery(s.fileContent))
+	mux.Handle("GET /api/v1/files/{id}/thumbnail", s.requireAuthQuery(s.thumbnail))
 	authed("PATCH /api/v1/files/{id}", s.patchFile)
 	authed("DELETE /api/v1/files/{id}", s.deleteFile)
 	authed("POST /api/v1/folders", s.createFolder)
@@ -115,7 +120,7 @@ func (s *Server) Handler() http.Handler {
 	authed("POST /api/v1/sync/have", s.have)
 	authed("GET /api/v1/sync/changes", s.changes)
 	authed("GET /api/v1/sync/cursor", s.cursor)
-	mux.Handle("GET /api/v1/events", s.requireAuthWS(s.events))
+	mux.Handle("GET /api/v1/events", s.requireAuthQuery(s.events))
 
 	admin("GET /api/v1/admin/users", s.adminListUsers)
 	admin("POST /api/v1/admin/users", s.adminCreateUser)
@@ -130,6 +135,9 @@ func (s *Server) Handler() http.Handler {
 
 	if s.Extra != nil {
 		s.Extra(mux, s)
+	}
+	if s.WebUI != nil {
+		mux.Handle("GET /", s.WebUI)
 	}
 	return s.instrument(mux)
 }
@@ -217,9 +225,10 @@ func (s *Server) requireAuth(h http.HandlerFunc, adminOnly bool) http.Handler {
 	})
 }
 
-// requireAuthWS also accepts ?access_token= because browsers can't set
-// headers on WebSocket connections.
-func (s *Server) requireAuthWS(h http.HandlerFunc) http.Handler {
+// requireAuthQuery also accepts ?access_token= because browsers can't set
+// headers on WebSocket connections or <img>/<video> requests. Only used for
+// read-only GET endpoints; access tokens expire after 15 minutes.
+func (s *Server) requireAuthQuery(h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" && r.URL.Query().Get("access_token") != "" {
 			r.Header.Set("Authorization", "Bearer "+r.URL.Query().Get("access_token"))

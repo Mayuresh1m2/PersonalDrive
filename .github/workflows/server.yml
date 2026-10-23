@@ -3,9 +3,9 @@ name: server
 on:
   push:
     branches: [main]
-    paths: ["server/**", "shared_lib/api/**", ".github/workflows/server.yml"]
+    paths: ["server/**", "desktop_app/**", "scripts/**", "shared_lib/api/**", ".github/workflows/server.yml"]
   pull_request:
-    paths: ["server/**", "shared_lib/api/**", ".github/workflows/server.yml"]
+    paths: ["server/**", "desktop_app/**", "scripts/**", "shared_lib/api/**", ".github/workflows/server.yml"]
 
 jobs:
   test:
@@ -22,5 +22,24 @@ jobs:
       - run: make vet
       - run: make test-race
       - run: make build-all
+      - name: Disaster drill (real binaries + bootstrap.sh against a fake S3)
+        run: ../scripts/disaster-drill.sh
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  desktop-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: desktop_app/go.mod
+          cache-dependency-path: |
+            server/go.sum
+            desktop_app/go.sum
+      - run: make -C server build
+      - working-directory: desktop_app
+        run: |
+          go vet ./...
+          go test -race ./...
+          for os in linux darwin windows; do GOOS=$os GOARCH=amd64 go build -o /dev/null ./cmd/pdrive-sync; done

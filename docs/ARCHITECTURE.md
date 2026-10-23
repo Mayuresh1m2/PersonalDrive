@@ -14,19 +14,19 @@
  │              └──► change notifier ──► /sync/changes long-poll, /events │
  │  volume guard (disk markers) · TLS manager · health · trash/upload GC  │
  └────────────────────────────────────────────────────────────────────────┘
-        │ scheduled, encrypted, deduplicated snapshots  (Phase 2)
-        ▼
- disk B (local backup)  ─────►  S3 Deep Archive (offsite)
+        │ backup service: scheduled, encrypted, deduplicated snapshots
+        ▼          of the library + DB/secrets/TLS CA
+ disk B (local backup, hourly)      S3 Deep Archive (offsite, nightly)
 ```
 
 ## Where things live
 
 | Location | Config key | Contents | Backed up? |
 | --- | --- | --- | --- |
-| Laptop SSD | `paths.state` | `pdrive.db`, `secrets/`, `tls/`, `cache/thumbs/`, `staging/` (in-flight uploads) | DB, secrets and TLS: yes (Phase 2). Cache/staging: no |
+| Laptop SSD | `paths.state` | `pdrive.db`, `secrets/`, `tls/`, `cache/thumbs/`, `staging/` (in-flight uploads), `backup/` (index cache, pack staging) | DB, token key and TLS CA: yes. Cache/staging and the backup passphrase: no |
 | External disk A | `paths.library` | `users/<name>/…`, `shared/<space>/…`, `.trash/`, `.tmp/`, `.pdrive-volume` | Yes |
-| External disk B | `backup.targets` | Backup repository (Phase 2) | — |
-| S3 | `backup.targets` | Backup repository (Phase 2) | — |
+| External disk B | `backup.targets` | Backup repository | — |
+| S3 | `backup.targets` | Backup repository | — |
 
 ## Server packages (`server/internal/…`)
 
@@ -47,6 +47,12 @@
 | `health` | Disk space, SMART, job stats |
 | `dupes` | Read-only duplicate scanner for existing folders |
 | `app` | Wiring, background tasks, state-dir lock |
+| `backup/chunker` | FastCDC content-defined chunking (seeded per repository) |
+| `backup/crypto` | Master key, XChaCha20-Poly1305 sealing, keyed BLAKE3 ids, Argon2id key files, recovery keys |
+| `backup/repo` | Repository format: packs, index (+ local cache), trees, snapshots, locks |
+| `backup/objectstore` | Local disk and S3 backends, plus an archive-tier simulator for tests |
+| `backup/engine` | Backup, restore (plan, thaw, resume), prune (min-duration aware), check |
+| `backup/service` | Scheduling, status, alerts, metadata snapshot, recovery kit, metadata restore |
 
 ## Key invariants
 

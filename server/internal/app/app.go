@@ -18,6 +18,7 @@ import (
 
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/api"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/auth"
+	backupsvc "github.com/Mayuresh1m2/PersonalDrive/server/internal/backup/service"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/config"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/discovery"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/events"
@@ -29,6 +30,7 @@ import (
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/storage"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/tlsutil"
 	"github.com/Mayuresh1m2/PersonalDrive/server/internal/volume"
+	"github.com/Mayuresh1m2/PersonalDrive/server/internal/webui"
 )
 
 // Version is set at build time with -ldflags "-X .../app.Version=...".
@@ -49,6 +51,7 @@ type App struct {
 	Jobs     *jobs.Queue
 	Runner   *processors.Runner
 	Thumbs   *processors.Thumbnails
+	Backup   *backupsvc.Service
 
 	lock      *os.File
 	setupCode string
@@ -82,6 +85,7 @@ func Open(cfg *config.Config, log *slog.Logger, exclusive bool) (*App, error) {
 		return nil, err
 	}
 	a.Guard = volume.NewGuard(cfg.Paths.Library, volume.RoleLibrary, expected)
+	a.checkRestoreMarker()
 	a.Store = storage.NewLocalStore(cfg.Paths.Library, storage.LinkOff)
 	a.onVolumeChange(context.Background())
 
@@ -118,7 +122,17 @@ func Open(cfg *config.Config, log *slog.Logger, exclusive bool) (*App, error) {
 	a.Thumbs = &processors.Thumbnails{CacheDir: cfg.StatePath("cache", "thumbs"), Sizes: cfg.Processing.ThumbnailSizes, FFmpeg: ffmpeg}
 	a.Runner = processors.NewRunner(db, a.Jobs, a.Lib.AbsPath, log, a.Thumbs, &processors.MediaInfo{DB: db})
 	a.Runner.Subscribe(a.Bus)
+	a.Backup = backupsvc.New(cfg, db, log, "pdrive "+Version)
 	return a, nil
+}
+
+// checkRestoreMarker keeps the library read-only while `pdrive restore` runs.
+func (a *App) checkRestoreMarker() {
+	if backupsvc.RestoreInProgress(a.Cfg.Paths.State) {
+		a.Guard.SetBlocked("restore in progress — the library is read-only until `pdrive restore` finishes")
+	} else {
+		a.Guard.SetBlocked("")
+	}
 }
 
 func (a *App) Close() {
@@ -213,6 +227,9 @@ func (a *App) HealthReport(ctx context.Context) health.Report {
 		r.Smart = append(r.Smart, s)
 	}
 	r.Jobs, _ = a.Jobs.Stats(ctx)
+	if a.Backup != nil {
+		r.Warnings = append(r.Warnings, a.Backup.Warnings()...)
+	}
 	r.OK = len(r.Warnings) == 0
 	return r
 }
@@ -237,7 +254,12 @@ func (a *App) Serve(ctx context.Context, extra func(*http.ServeMux, *api.Server)
 		}
 		a.Log.Info("TLS ready", "ca_sha256", tlsMgr.CAFingerprint())
 	}
-	srv := a.APIServer(tlsMgr, extra)
+	srv := a.APIServer(tlsMgr, func(mux *http.ServeMux, s *api.Server) {
+		a.registerBackupAPI(mux, s)
+		if extra != nil {
+			extra(mux, s)
+		}
+	})
 
 	ln, err := net.Listen("tcp", a.Cfg.Server.Listen)
 	if err != nil {
@@ -266,6 +288,17 @@ func (a *App) Serve(ctx context.Context, extra func(*http.ServeMux, *api.Server)
 	defer cancel()
 	go a.Jobs.Run(ctx, a.Cfg.Processing.Workers)
 	go a.background(ctx, tlsMgr)
+	if n, err := a.Runner.Backfill(ctx); err != nil {
+		a.Log.Warn("backfilling processors", "err", err)
+	} else if n > 0 {
+		a.Log.Info("queued background processing for existing files", "jobs", n)
+	}
+	if err := a.Backup.Start(ctx); err != nil {
+		return err
+	}
+	if len(a.Cfg.Backup.Targets) == 0 {
+		a.Log.Warn("no backup targets configured — see docs/BACKUP.md")
+	}
 
 	errc := make(chan error, 1)
 	go func() {
@@ -291,7 +324,7 @@ func (a *App) APIServer(tlsMgr *tlsutil.Manager, extra func(*http.ServeMux, *api
 	return api.New(api.Deps{
 		Cfg: a.Cfg, DB: a.DB, Lib: a.Lib, Auth: a.Auth, Notifier: a.Notifier, Jobs: a.Jobs, Thumbs: a.Thumbs,
 		TLS: tlsMgr, Health: a.HealthReport, Log: a.Log, Version: Version, SetupCode: a.SetupCode,
-		Extra: extra,
+		Extra: extra, WebUI: webui.Handler(), LastFullBackup: a.Backup.LastFullBackup,
 	})
 }
 
@@ -317,7 +350,9 @@ func (a *App) background(ctx context.Context, tlsMgr *tlsutil.Manager) {
 			return
 		case <-volTick.C:
 			before := a.Guard.Status().OK
-			if a.Guard.Refresh().OK != before {
+			a.checkRestoreMarker()
+			a.Guard.Refresh()
+			if a.Guard.Status().OK != before {
 				a.onVolumeChange(ctx)
 			}
 		case <-hourly.C:
@@ -334,12 +369,17 @@ func (a *App) background(ctx context.Context, tlsMgr *tlsutil.Manager) {
 	}
 }
 
-// maintenance purges expired trash and abandoned uploads.
+// RunMaintenance runs the hourly housekeeping once (tests, CLI).
+func (a *App) RunMaintenance(ctx context.Context) { a.maintenance(ctx) }
+
+// maintenance purges expired trash (if allowed) and abandoned uploads.
 func (a *App) maintenance(ctx context.Context) {
-	if n, err := a.Lib.PurgeExpiredTrash(ctx); err != nil && !errors.Is(err, volume.ErrUnavailable) {
-		a.Log.Error("purging trash", "err", err)
-	} else if n > 0 {
-		a.Log.Info("purged expired trash", "entries", n)
+	if a.Cfg.Safety.PurgeTrash {
+		if n, err := a.Lib.PurgeExpiredTrash(ctx); err != nil && !errors.Is(err, volume.ErrUnavailable) {
+			a.Log.Error("purging trash", "err", err)
+		} else if n > 0 {
+			a.Log.Info("purged expired trash", "entries", n)
+		}
 	}
 	ids, err := a.DB.ExpiredUploads(ctx, time.Now())
 	if err == nil {

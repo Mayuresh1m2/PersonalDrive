@@ -340,7 +340,8 @@ paths:
                 type: object
                 properties:
                   items: { type: array, items: { $ref: "#/components/schemas/File" } }
-                  retention_days: { type: integer }
+                  retention_days: { type: integer, description: "0 = kept until deleted by hand" }
+                  permanent_delete: { type: boolean, description: Whether "delete forever" is allowed }
 
   /api/v1/trash/{id}/restore:
     post:
@@ -622,6 +623,59 @@ paths:
         "202": { description: Started }
         "409": { $ref: "#/components/responses/Error" }
 
+  /api/v1/admin/backup/status:
+    get:
+      summary: Backup targets, last results, next runs, and warnings
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  targets: { type: array, items: { $ref: "#/components/schemas/BackupTarget" } }
+                  warnings: { type: [array, "null"], items: { type: string } }
+
+  /api/v1/admin/backup/run:
+    post:
+      summary: Start a backup of one target now
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target]
+              properties:
+                target: { type: string }
+      responses:
+        "202": { description: Started }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /api/v1/admin/backup/snapshots:
+    get:
+      summary: Snapshots of a target, newest first
+      parameters:
+        - { name: target, in: query, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Snapshots
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        time: { type: string, format: date-time }
+                        host: { type: string }
+                        stats: { $ref: "#/components/schemas/SnapshotStats" }
+
 components:
   securitySchemes:
     bearer:
@@ -677,6 +731,18 @@ components:
         read_only: { type: boolean }
         dedup_scope: { type: string, enum: [household, user] }
         part_size: { type: integer }
+        safety:
+          type: object
+          description: Which permanently-destructive features the admin has enabled (all off by default)
+          properties:
+            purge_trash: { type: boolean }
+            permanent_delete: { type: boolean }
+            prune_backups: { type: boolean }
+            free_up_space: { type: boolean }
+        last_full_backup:
+          type: [string, "null"]
+          format: date-time
+          description: Everything uploaded before this time exists in every configured backup target
 
     PairingPayload:
       type: object
@@ -799,6 +865,46 @@ components:
         jobs: { type: object, additionalProperties: { type: integer } }
         warnings: { type: array, items: { type: string } }
         at: { type: string, format: date-time }
+
+    BackupTarget:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [local, s3] }
+        location: { type: string }
+        storage_class: { type: string }
+        schedule: { type: string }
+        next_run: { type: string, format: date-time }
+        running: { type: string, enum: [backup, prune, check] }
+        progress:
+          type: object
+          properties:
+            phase: { type: string }
+            files: { type: integer }
+            bytes: { type: integer }
+            bytes_new: { type: integer }
+            uploaded: { type: integer }
+        last_run: { type: string, format: date-time }
+        last_success: { type: string, format: date-time }
+        last_error: { type: string }
+        last_snapshot: { type: string }
+        last_stats: { $ref: "#/components/schemas/SnapshotStats" }
+
+    SnapshotStats:
+      type: object
+      properties:
+        files: { type: integer }
+        dirs: { type: integer }
+        bytes_scanned: { type: integer }
+        bytes_read: { type: integer }
+        bytes_new: { type: integer }
+        bytes_deduped: { type: integer }
+        bytes_stored: { type: integer }
+        bytes_uploaded: { type: integer }
+        packs_uploaded: { type: integer }
+        files_unchanged: { type: integer }
+        errors: { type: array, items: { type: string } }
+        duration: { type: integer, description: Nanoseconds }
 
     VolumeStatus:
       type: object

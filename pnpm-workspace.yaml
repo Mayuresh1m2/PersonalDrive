@@ -1,0 +1,4 @@
+packages:
+  - shared_lib
+  - web_app
+  - mobile_app

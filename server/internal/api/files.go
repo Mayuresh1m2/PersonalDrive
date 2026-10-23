@@ -124,6 +124,13 @@ func (s *Server) fileContent(w http.ResponseWriter, r *http.Request) {
 	defer fh.Close()
 	w.Header().Set("ETag", `"`+f.SHA256+`"`)
 	w.Header().Set("Content-Type", f.Mime)
+	// User content is served from the app's origin: sandbox it so an uploaded
+	// HTML/SVG file can't run scripts with the viewer's session. (Browsers
+	// refuse to render PDFs in a sandbox, and PDFs can't reach the page.)
+	if f.Mime != "application/pdf" {
+		w.Header().Set("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
+	}
+	w.Header().Set("Referrer-Policy", "no-referrer")
 	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
 	disp := "inline"
 	if r.URL.Query().Get("download") == "1" {
@@ -222,8 +229,12 @@ func (s *Server) listTrash(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	days := int(s.Cfg.Trash.Retention.D().Hours() / 24)
+	if !s.Cfg.Safety.PurgeTrash {
+		days = 0 // kept forever
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items": toJSONList(items), "retention_days": int(s.Cfg.Trash.Retention.D().Hours() / 24),
+		"items": toJSONList(items), "retention_days": days, "permanent_delete": s.Cfg.Safety.PermanentDelete,
 	})
 }
 
@@ -243,6 +254,11 @@ func (s *Server) restoreTrash(w http.ResponseWriter, r *http.Request) {
 func (s *Server) purgeTrash(w http.ResponseWriter, r *http.Request) {
 	f, a, ok := s.fileFromPath(w, r)
 	if !ok {
+		return
+	}
+	if !s.Cfg.Safety.PermanentDelete {
+		writeErr(w, http.StatusForbidden, "disabled_by_safety",
+			"permanent deletion is turned off on this server (safety.permanent_delete); items stay in the trash")
 		return
 	}
 	if !a.Write {

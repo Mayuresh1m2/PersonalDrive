@@ -1,0 +1,32 @@
+name: clients
+
+on:
+  push:
+    branches: [main]
+    paths: ["shared_lib/**", "web_app/**", "mobile_app/**", "server/**", "package.json", "pnpm-*.yaml", ".github/workflows/clients.yml"]
+  pull_request:
+    paths: ["shared_lib/**", "web_app/**", "mobile_app/**", "server/**", "package.json", "pnpm-*.yaml", ".github/workflows/clients.yml"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: make -C server build
+      - name: Build the shared SDK (apps type-check against its dist/)
+        run: pnpm --filter @pdrive/client build
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - run: pnpm --filter @pdrive/client --filter @pdrive/web build
+      - name: Bundle the mobile app (JS only; native builds need device SDKs)
+        run: pnpm --filter @pdrive/mobile bundle

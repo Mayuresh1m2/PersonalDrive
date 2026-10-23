@@ -1,0 +1,33 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Build (with the web app embedded)
+        working-directory: server
+        run: |
+          make web
+          make build-all VERSION=${GITHUB_REF_NAME}
+          cd bin && for f in pdrive-linux-*; do sha256sum "$f" > "$f.sha256"; done
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" server/bin/pdrive-linux-* --generate-notes

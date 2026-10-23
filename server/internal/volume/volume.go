@@ -129,8 +129,16 @@ func Usage(path string) (free, total uint64) {
 type Guard struct {
 	dir, role, expectedID string
 
-	mu     sync.RWMutex
-	status Status
+	mu      sync.RWMutex
+	status  Status
+	blocked string // e.g. a restore in progress
+}
+
+// SetBlocked forces the volume read-only with a reason ("" clears it).
+func (g *Guard) SetBlocked(reason string) {
+	g.mu.Lock()
+	g.blocked = reason
+	g.mu.Unlock()
 }
 
 func NewGuard(dir, role, expectedID string) *Guard {
@@ -161,7 +169,11 @@ func (g *Guard) Refresh() Status {
 func (g *Guard) Status() Status {
 	g.mu.RLock()
 	defer g.mu.RUnlock()
-	return g.status
+	s := g.status
+	if g.blocked != "" && s.OK {
+		s.OK, s.Problem = false, g.blocked
+	}
+	return s
 }
 
 // ErrUnavailable is returned by Writable when the volume is not safe to use.

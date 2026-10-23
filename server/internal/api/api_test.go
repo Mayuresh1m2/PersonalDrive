@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -450,5 +451,89 @@ func TestThumbnailGenerated(t *testing.T) {
 			t.Fatal("media info never extracted")
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestWebUIAndMediaTokens(t *testing.T) {
+	e := newEnv(t)
+	alice := e.admin()
+	for _, p := range []string{"/", "/space/3", "/admin/people"} {
+		resp, err := http.Get(e.srv.URL + p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != 200 || !bytes.Contains(body, []byte("PersonalDrive")) {
+			t.Fatalf("GET %s: %d", p, resp.StatusCode)
+		}
+		if csp := resp.Header.Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'self'") {
+			t.Fatalf("missing CSP on %s: %q", p, csp)
+		}
+	}
+	if resp, _ := http.Get(e.srv.URL + "/assets/missing.js"); resp.StatusCode != 404 {
+		t.Fatalf("missing asset should 404, got %d", resp.StatusCode)
+	}
+
+	res, _ := alice.upload(0, "page.html", []byte("<script>alert(1)</script>"), nil)
+	var tok tokens
+	(&client{e: e}).do("POST", "/api/v1/auth/login", map[string]any{"username": "alice", "password": "alice's long password"}, &tok)
+	content := fmt.Sprintf("%s/api/v1/files/%d/content?access_token=%s", e.srv.URL, res.File.ID, tok.AccessToken)
+	resp, err := http.Get(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("query token on content: %d", resp.StatusCode)
+	}
+	if csp := resp.Header.Get("Content-Security-Policy"); !strings.HasPrefix(csp, "sandbox") {
+		t.Fatalf("user HTML must be sandboxed, CSP = %q", csp)
+	}
+	// Query tokens are not accepted on other endpoints.
+	if resp, _ := http.Get(fmt.Sprintf("%s/api/v1/me?access_token=%s", e.srv.URL, tok.AccessToken)); resp.StatusCode != 401 {
+		t.Fatalf("query token accepted on /me: %d", resp.StatusCode)
+	}
+}
+
+func TestSafetyGates(t *testing.T) {
+	e := newEnv(t)
+	alice := e.admin()
+	var info struct {
+		Safety map[string]bool `json:"safety"`
+	}
+	(&client{e: e}).do("GET", "/api/v1/server", nil, &info)
+	for _, k := range []string{"purge_trash", "permanent_delete", "prune_backups", "free_up_space"} {
+		if v, ok := info.Safety[k]; !ok || v {
+			t.Fatalf("safety.%s should default to off, got %v (present %v)", k, v, ok)
+		}
+	}
+
+	res, _ := alice.upload(0, "keep-me.txt", []byte("precious"), nil)
+	alice.do("DELETE", fmt.Sprintf("/api/v1/files/%d", res.File.ID), nil, nil)
+	var errResp struct{ Error struct{ Code string } }
+	if code := alice.do("DELETE", fmt.Sprintf("/api/v1/trash/%d", res.File.ID), nil, &errResp); code != 403 || errResp.Error.Code != "disabled_by_safety" {
+		t.Fatalf("permanent delete must be refused by default: %d %s", code, errResp.Error.Code)
+	}
+	var trash struct {
+		Items         []fileResp
+		RetentionDays int  `json:"retention_days"`
+		Permanent     bool `json:"permanent_delete"`
+	}
+	alice.do("GET", "/api/v1/trash", nil, &trash)
+	if len(trash.Items) != 1 || trash.RetentionDays != 0 || trash.Permanent {
+		t.Fatalf("trash should be kept forever in safe mode: %+v", trash)
+	}
+	// Hourly maintenance must not empty the trash, however old it is.
+	e.app.Cfg.Trash.Retention = 0
+	e.app.RunMaintenance(context.Background())
+	alice.do("GET", "/api/v1/trash", nil, &trash)
+	if len(trash.Items) != 1 {
+		t.Fatal("trash was purged in safe mode")
+	}
+
+	e.app.Cfg.Safety.PermanentDelete = true
+	if code := alice.do("DELETE", fmt.Sprintf("/api/v1/trash/%d", res.File.ID), nil, nil); code != 204 {
+		t.Fatalf("permanent delete once enabled: %d", code)
 	}
 }
